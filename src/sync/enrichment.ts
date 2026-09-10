@@ -2,9 +2,12 @@ import type { Repository, SegmentDetail } from '../db/repository.js';
 import type { SegmentRow } from '../db/types.js';
 import { analyzeSegmentGeometry, isWindNeutral } from '../geometry/analysis.js';
 import { distanceMeters } from '../geometry/haversine.js';
+import { describeError, log, logError } from '../log.js';
 import { parseKomDuration } from '../segment/komStatus.js';
 import type { StravaReadClient } from '../strava/client.js';
 import type { StravaDetailedSegment } from '../strava/types.js';
+
+const PROGRESS_INTERVAL = 25;
 
 function toSegmentDetail(id: number, detail: StravaDetailedSegment): SegmentDetail {
   return {
@@ -55,36 +58,58 @@ export async function enrichSegments(
     (a, b) => distanceFromHome(a, home) - distanceFromHome(b, home),
   );
 
+  const total = ordered.length;
+  const startedAt = Date.now();
   let count = 0;
-  for (const segment of ordered) {
-    const detail = await client.getSegment(segment.id);
-    const segmentDetail = toSegmentDetail(segment.id, detail);
-    repo.applyEnrichment(segmentDetail, new Date().toISOString());
+  let failed = 0;
 
-    // Geometry is immutable once known — only compute it the first time.
-    const alreadyHasGeometry = repo.getSegment(segment.id)?.bearing_deg !== null;
-    if (!alreadyHasGeometry) {
-      const geometry = analyzeSegmentGeometry(
-        segmentDetail.polyline,
-        segmentDetail.startLat !== null && segmentDetail.startLng !== null
-          ? [segmentDetail.startLat, segmentDetail.startLng]
-          : null,
-        segmentDetail.endLat !== null && segmentDetail.endLng !== null
-          ? [segmentDetail.endLat, segmentDetail.endLng]
-          : null,
-      );
-      if (geometry) {
-        repo.applyGeometry(
-          segment.id,
-          geometry.bearingDeg,
-          geometry.directionality,
-          geometry.approximate,
-          isWindNeutral(geometry.directionality, windNeutralThreshold),
+  if (total > 0) log(`Enriching ${total} segments.`);
+
+  for (const segment of ordered) {
+    try {
+      const detail = await client.getSegment(segment.id);
+      const segmentDetail = toSegmentDetail(segment.id, detail);
+      repo.applyEnrichment(segmentDetail, new Date().toISOString());
+
+      // Geometry is immutable once known — only compute it the first time.
+      const alreadyHasGeometry = repo.getSegment(segment.id)?.bearing_deg !== null;
+      if (!alreadyHasGeometry) {
+        const geometry = analyzeSegmentGeometry(
+          segmentDetail.polyline,
+          segmentDetail.startLat !== null && segmentDetail.startLng !== null
+            ? [segmentDetail.startLat, segmentDetail.startLng]
+            : null,
+          segmentDetail.endLat !== null && segmentDetail.endLng !== null
+            ? [segmentDetail.endLat, segmentDetail.endLng]
+            : null,
         );
+        if (geometry) {
+          repo.applyGeometry(
+            segment.id,
+            geometry.bearingDeg,
+            geometry.directionality,
+            geometry.approximate,
+            isWindNeutral(geometry.directionality, windNeutralThreshold),
+          );
+        }
       }
+
+      count += 1;
+    } catch (err) {
+      // Left un-enriched — repo.segmentsLackingDetail()/segmentsWithStaleKom() will retry it on the next run.
+      failed += 1;
+      logError(`Segment ${segment.id}: failed to enrich, will retry on next run — ${describeError(err)}`);
     }
 
-    count += 1;
+    const done = count + failed;
+    if (done % PROGRESS_INTERVAL === 0 || done === total) {
+      const elapsedS = (Date.now() - startedAt) / 1000;
+      const rate = done / Math.max(elapsedS, 1);
+      const etaS = rate > 0 ? (total - done) / rate : 0;
+      log(
+        `Progress: ${done}/${total} segments (${count} ok, ${failed} failed) — ${elapsedS.toFixed(0)}s elapsed, ~${etaS.toFixed(0)}s remaining.`,
+      );
+    }
   }
 
   return count;

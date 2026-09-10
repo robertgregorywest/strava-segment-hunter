@@ -1,4 +1,5 @@
 import type { Repository } from '../db/repository.js';
+import { log } from '../log.js';
 import type { StravaReadClient } from '../strava/client.js';
 
 const PER_PAGE = 200;
@@ -31,6 +32,7 @@ export async function ingestStarredSegments(client: StravaReadClient, repo: Repo
       total += 1;
     }
 
+    log(`Starred segments: page ${page} — ${segments.length} segments (${total} total so far).`);
     page += 1;
   }
 

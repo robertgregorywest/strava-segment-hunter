@@ -48,6 +48,8 @@ own data.
    | `KOM_FRESHNESS_DAYS` | How long a stored KOM time is trusted before being re-fetched |
    | `WIND_NEUTRAL_THRESHOLD` | Directionality below which a segment is treated as wind-neutral |
    | `FORECAST_CACHE_MINUTES` | How long Open-Meteo forecast responses are cached |
+   | `SYNC_REQUEST_TIMEOUT_MS` | Per-request timeout before a Strava call is aborted and retried (default `30000`) |
+   | `SYNC_MAX_NETWORK_RETRIES` | Retries for a network-level failure (not a 429) before giving up on that call (default `5`) |
 
 3. Authenticate with Strava (opens a browser flow, saves tokens to `STRAVA_TOKEN_PATH`):
 
@@ -69,6 +71,23 @@ own data.
    ```bash
    npm run sync
    ```
+
+   To run the backfill unattended (it can take a while across thousands of
+   activities), use the backgrounded variant instead. It logs timestamped
+   progress to `logs/`, and auto-restarts on a crash (e.g. a stalled network
+   connection) since progress is committed per-activity/per-segment — a
+   restart just resumes, it never repeats work:
+
+   ```bash
+   npm run sync:backfill:bg
+   tail -f logs/backfill-*.log      # watch progress
+   kill $(cat logs/backfill.pid)    # stop it
+   ```
+
+   Each Strava request is retried with backoff on transient network failures
+   and bounded by a per-request timeout (`SYNC_REQUEST_TIMEOUT_MS`, default
+   30s) so a stalled connection fails fast instead of hanging for minutes;
+   tune it and `SYNC_MAX_NETWORK_RETRIES` (default 5) via `.env` if needed.
 
 5. Start the web UI:
 

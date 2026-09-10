@@ -2,6 +2,7 @@ import { loadConfig } from '../config/index.js';
 import { openDatabase } from '../db/index.js';
 import { Repository } from '../db/repository.js';
 import { SyncState } from '../db/syncState.js';
+import { log, logError } from '../log.js';
 import { AuthManager, NotAuthorizedError, ReauthorizationRequiredError, describeCapabilityLoss, missingScopes } from '../strava/auth.js';
 import { StravaClient } from '../strava/client.js';
 import { DailyQuotaExhaustedError, RateLimitBudgeter } from '../strava/rateLimiter.js';
@@ -12,6 +13,7 @@ import { ingestStarredSegments } from './starred.js';
 
 async function main(): Promise<void> {
   const backfillMode = process.argv.includes('--backfill');
+  const startedAt = Date.now();
 
   const config = loadConfig();
   const db = openDatabase(config.db.path);
@@ -21,33 +23,36 @@ async function main(): Promise<void> {
   const auth = new AuthManager(config);
   const tokens = auth.currentTokens();
   if (!tokens) {
-    console.error(new NotAuthorizedError().message);
+    logError(new NotAuthorizedError().message);
     process.exitCode = 1;
     return;
   }
 
   const missing = missingScopes(tokens.scope);
   for (const scope of missing) {
-    console.warn(`Missing Strava scope "${scope}": ${describeCapabilityLoss(scope)} will be unavailable.`);
+    log(`Missing Strava scope "${scope}": ${describeCapabilityLoss(scope)} will be unavailable.`);
   }
 
   const budgeter = new RateLimitBudgeter(db, config.sync.shortWindowPauseFraction);
-  const client = new StravaClient(auth, budgeter);
+  const client = new StravaClient(auth, budgeter, {
+    requestTimeoutMs: config.sync.requestTimeoutMs,
+    maxNetworkRetries: config.sync.maxNetworkRetries,
+  });
 
-  console.log(backfillMode ? 'Starting full backfill…' : 'Starting incremental sync…');
+  log(backfillMode ? 'Starting full backfill…' : 'Starting incremental sync…');
 
   if (backfillMode) {
     const listed = await listActivities(client, repo, state);
-    console.log(`Listed ${listed} new activities.`);
+    log(`Listed ${listed} new activities.`);
     const processed = await processUnprocessedActivities(client, repo);
-    console.log(`Processed segment efforts for ${processed} activities.`);
+    log(`Processed segment efforts for ${processed} activities.`);
   } else {
     const { listed, processed } = await incrementalSync(client, repo, state);
-    console.log(`Listed ${listed} new activities, processed ${processed}.`);
+    log(`Listed ${listed} new activities, processed ${processed}.`);
   }
 
   const starred = await ingestStarredSegments(client, repo);
-  console.log(`Ingested ${starred} starred segments.`);
+  log(`Ingested ${starred} starred segments.`);
 
   const enriched = await enrichSegments(
     client,
@@ -56,22 +61,23 @@ async function main(): Promise<void> {
     config.segment.komFreshnessDays,
     config.segment.windNeutralThreshold,
   );
-  console.log(`Enriched ${enriched} segments.`);
+  log(`Enriched ${enriched} segments.`);
 
   const counts = repo.activityCount();
-  console.log(`Corpus: ${counts.processed}/${counts.total} activities processed.`);
+  const elapsedS = (Date.now() - startedAt) / 1000;
+  log(`Corpus: ${counts.processed}/${counts.total} activities processed. Run took ${elapsedS.toFixed(0)}s.`);
 }
 
 main().catch((err: unknown) => {
   if (err instanceof DailyQuotaExhaustedError) {
-    console.log(err.message);
+    log(err.message);
     return;
   }
   if (err instanceof ReauthorizationRequiredError) {
-    console.error(err.message);
+    logError(err.message);
     process.exitCode = 1;
     return;
   }
-  console.error(err);
+  logError(err instanceof Error ? `${err.stack ?? err.message}` : String(err));
   process.exitCode = 1;
 });

@@ -60,6 +60,10 @@ export interface Config {
   sync: {
     /** Fraction of the 15-minute quota window at which the budgeter pauses. */
     shortWindowPauseFraction: number;
+    /** Per-request timeout before a Strava call is aborted and retried. */
+    requestTimeoutMs: number;
+    /** How many times a network-level failure (not a 429) is retried before giving up on that call. */
+    maxNetworkRetries: number;
   };
   segment: {
     /** Days a stored KOM time is trusted before re-enrichment is queued. */
@@ -103,6 +107,8 @@ export function loadConfig(): Config {
     },
     sync: {
       shortWindowPauseFraction: optionalFloat('SYNC_SHORT_WINDOW_PAUSE_FRACTION', 0.9),
+      requestTimeoutMs: optionalInt('SYNC_REQUEST_TIMEOUT_MS', 30_000),
+      maxNetworkRetries: optionalInt('SYNC_MAX_NETWORK_RETRIES', 5),
     },
     segment: {
       komFreshnessDays: optionalInt('KOM_FRESHNESS_DAYS', 14),

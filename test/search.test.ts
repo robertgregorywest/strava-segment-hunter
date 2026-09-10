@@ -17,7 +17,7 @@ function testConfig(overrides: Partial<Config> = {}): Config {
     rider: { massKg: 78, cdA: 0.32, crr: 0.005, roughnessFactor: 0.55 },
     db: { path: 'x' },
     api: { port: 3000 },
-    sync: { shortWindowPauseFraction: 0.9 },
+    sync: { shortWindowPauseFraction: 0.9, requestTimeoutMs: 30_000, maxNetworkRetries: 5 },
     segment: { komFreshnessDays: 14, windNeutralThreshold: 0.5 },
     weather: { forecastCacheMinutes: 60 },
     ...overrides,

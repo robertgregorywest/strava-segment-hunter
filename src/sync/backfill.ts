@@ -1,9 +1,11 @@
 import type { Repository, SegmentStub } from '../db/repository.js';
 import type { SyncState } from '../db/syncState.js';
+import { describeError, log, logError } from '../log.js';
 import type { StravaReadClient } from '../strava/client.js';
 import type { StravaSummarySegment } from '../strava/types.js';
 
 const PER_PAGE = 200;
+const PROGRESS_INTERVAL = 25;
 
 function toSegmentStub(segment: StravaSummarySegment): SegmentStub {
   return {
@@ -49,6 +51,8 @@ export async function listActivities(
       total += 1;
     }
 
+    log(`Listed page ${page}: ${activities.length} activities (${total} total so far).`);
+
     state.set(cursorKey, String(page + 1));
     page += 1;
   }
@@ -66,33 +70,54 @@ export async function processUnprocessedActivities(
   repo: Repository,
 ): Promise<number> {
   const pending = repo.unprocessedActivities();
+  const total = pending.length;
+  const startedAt = Date.now();
   let processed = 0;
+  let failed = 0;
+
+  if (total > 0) log(`Processing segment efforts for ${total} activities.`);
 
   for (const activity of pending) {
-    const detail = await client.getActivity(activity.id);
-    const touchedSegments = new Set<number>();
+    try {
+      const detail = await client.getActivity(activity.id);
+      const touchedSegments = new Set<number>();
 
-    for (const effort of detail.segment_efforts ?? []) {
-      repo.upsertSegmentStub(toSegmentStub(effort.segment));
-      repo.insertEffort({
-        id: effort.id,
-        segmentId: effort.segment.id,
-        activityId: activity.id,
-        elapsedTimeS: effort.elapsed_time,
-        startDate: effort.start_date,
-        prRank: effort.pr_rank,
-        komRank: effort.kom_rank,
-      });
-      repo.markSegmentHasBaseline(effort.segment.id);
-      touchedSegments.add(effort.segment.id);
+      for (const effort of detail.segment_efforts ?? []) {
+        repo.upsertSegmentStub(toSegmentStub(effort.segment));
+        repo.insertEffort({
+          id: effort.id,
+          segmentId: effort.segment.id,
+          activityId: activity.id,
+          elapsedTimeS: effort.elapsed_time,
+          startDate: effort.start_date,
+          prRank: effort.pr_rank,
+          komRank: effort.kom_rank,
+        });
+        repo.markSegmentHasBaseline(effort.segment.id);
+        touchedSegments.add(effort.segment.id);
+      }
+
+      for (const segmentId of touchedSegments) {
+        repo.refreshBestKomRank(segmentId);
+      }
+
+      repo.markActivityProcessed(activity.id);
+      processed += 1;
+    } catch (err) {
+      // Left unprocessed — repo.unprocessedActivities() will retry it on the next run.
+      failed += 1;
+      logError(`Activity ${activity.id}: failed to process, will retry on next run — ${describeError(err)}`);
     }
 
-    for (const segmentId of touchedSegments) {
-      repo.refreshBestKomRank(segmentId);
+    const done = processed + failed;
+    if (done % PROGRESS_INTERVAL === 0 || done === total) {
+      const elapsedS = (Date.now() - startedAt) / 1000;
+      const rate = done / Math.max(elapsedS, 1);
+      const etaS = rate > 0 ? (total - done) / rate : 0;
+      log(
+        `Progress: ${done}/${total} activities (${processed} ok, ${failed} failed) — ${elapsedS.toFixed(0)}s elapsed, ~${etaS.toFixed(0)}s remaining.`,
+      );
     }
-
-    repo.markActivityProcessed(activity.id);
-    processed += 1;
   }
 
   return processed;

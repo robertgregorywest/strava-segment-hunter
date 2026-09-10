@@ -8,6 +8,7 @@
     "auth": "tsx src/strava/authorize.ts",
     "sync": "tsx src/sync/index.ts",
     "sync:backfill": "tsx src/sync/index.ts --backfill",
+    "sync:backfill:bg": "./scripts/backfill.sh",
     "api": "tsx src/api/server.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -1,5 +1,6 @@
 import type { DB } from '../db/index.js';
 import type { RateLimitStateRow } from '../db/types.js';
+import { log } from '../log.js';
 
 export class DailyQuotaExhaustedError extends Error {
   constructor() {
@@ -54,6 +55,7 @@ export class RateLimitBudgeter {
       const retryAfterMs = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) * 1000 : NaN;
       const waitMs = Number.isFinite(retryAfterMs) ? retryAfterMs : backoffMs;
 
+      log(`Received 429 from Strava; pausing ${Math.round(waitMs / 1000)}s before retrying.`);
       await this.deps.sleep(waitMs);
       backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
     }
@@ -105,6 +107,9 @@ export class RateLimitBudgeter {
     const short = this.getState('short');
     if (short && short.usage_value >= short.limit_value * this.pauseFraction) {
       const waitMs = this.msUntilNextShortWindow();
+      log(
+        `Short-window read budget at ${short.usage_value}/${short.limit_value}; pausing ${Math.round(waitMs / 1000)}s until the next 15-minute window.`,
+      );
       await this.deps.sleep(waitMs);
     }
   }
