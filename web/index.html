@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Segment Hunter</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Segment Hunter</h1>
+    <button id="settingsToggle" class="ghost-btn" type="button">Rider settings</button>
+  </header>
+
+  <div id="weatherBanner" class="banner banner--warn" hidden>
+    Wind data is currently unreachable — results below are shown without wind projections.
+  </div>
+
+  <main class="layout">
+    <section class="panel search-panel">
+      <form id="searchForm">
+        <div class="field-row">
+          <label>Latitude<input type="number" step="0.0001" id="lat" required /></label>
+          <label>Longitude<input type="number" step="0.0001" id="lng" required /></label>
+        </div>
+        <div class="field-row">
+          <label>Radius (m)<input type="number" step="50" min="50" id="radiusM" value="5000" required /></label>
+          <label>Date<input type="date" id="targetDate" required /></label>
+        </div>
+
+        <details class="filters">
+          <summary>Filters</summary>
+          <div class="field-row">
+            <label>Max gap to KOM (s)<input type="number" id="maxGapToKomS" placeholder="any" /></label>
+            <label>Max KOM rank<input type="number" id="maxKomRank" placeholder="any" /></label>
+          </div>
+          <div class="field-row">
+            <label>Min length (m)<input type="number" id="minLengthM" placeholder="any" /></label>
+            <label>Max length (m)<input type="number" id="maxLengthM" placeholder="any" /></label>
+          </div>
+          <div class="field-row">
+            <label>Min grade (%)<input type="number" step="0.1" id="minGradePercent" placeholder="any" /></label>
+            <label>Max grade (%)<input type="number" step="0.1" id="maxGradePercent" placeholder="any" /></label>
+          </div>
+          <div class="field-row">
+            <label>Min directionality<input type="number" step="0.05" min="0" max="1" id="minDirectionality" placeholder="any" /></label>
+            <label>Order by
+              <select id="orderBy">
+                <option value="projectedMargin">Projected margin to KOM</option>
+                <option value="distance">Distance from search point</option>
+                <option value="length">Segment length</option>
+                <option value="gradient">Average grade</option>
+              </select>
+            </label>
+          </div>
+        </details>
+
+        <button type="submit">Search</button>
+      </form>
+
+      <p id="forecastHorizonNote" class="hint"></p>
+      <p id="resultMessage" class="hint" hidden></p>
+
+      <ul id="results" class="results"></ul>
+    </section>
+
+    <section class="panel map-panel">
+      <div id="map"></div>
+      <p class="hint legend">
+        <span class="legend-item"><span class="arrow arrow--bearing"></span> segment direction</span>
+        <span class="legend-item"><span class="arrow arrow--wind"></span> wind at best hour</span>
+      </p>
+    </section>
+  </main>
+
+  <aside id="detailPanel" class="panel detail-panel" hidden>
+    <button id="detailClose" class="ghost-btn" type="button">Close ✕</button>
+    <div id="detailContent"></div>
+  </aside>
+
+  <aside id="settingsPanel" class="panel settings-panel" hidden>
+    <button id="settingsClose" class="ghost-btn" type="button">Close ✕</button>
+    <h2>Rider settings</h2>
+    <form id="settingsForm">
+      <label>Rider + bike mass (kg)<input type="number" step="0.5" id="massKg" required /></label>
+      <label>CdA (drag area, m&sup2;)<input type="number" step="0.005" id="cdA" required /></label>
+      <label>Crr (rolling resistance)<input type="number" step="0.0005" id="crr" required /></label>
+      <label>Wind roughness factor<input type="number" step="0.01" id="roughnessFactor" required /></label>
+      <button type="submit">Save &amp; re-run search</button>
+    </form>
+    <p class="hint">Saving re-projects every result and the open segment detail with the new parameters.</p>
+  </aside>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
