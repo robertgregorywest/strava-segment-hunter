@@ -68,6 +68,19 @@ describe('RateLimitBudgeter', () => {
     expect(fetchOnce).not.toHaveBeenCalled();
   });
 
+  it('does not throw when the exhausted daily reading is from a prior UTC day', async () => {
+    db.prepare(
+      `INSERT INTO rate_limit_state (window, limit_value, usage_value, observed_at) VALUES ('daily', 2000, 2000, '2026-09-11T06:53:23.505Z')`,
+    ).run();
+
+    const fixedNow = Date.UTC(2026, 8, 12, 7, 31, 0); // 2026-09-12, a day after the reading above
+    const fetchOnce = vi.fn(async () => headersResponse(200, 1, 200, 1, 2000));
+    const budgeter = new RateLimitBudgeter(db, 0.9, { now: () => fixedNow });
+
+    await expect(budgeter.run(fetchOnce)).resolves.toBeInstanceOf(Response);
+    expect(fetchOnce).toHaveBeenCalledTimes(1);
+  });
+
   it('retries with backoff on 429 and does not give up', async () => {
     const sleep = vi.fn(async () => {});
     const budgeter = new RateLimitBudgeter(db, 0.9, { sleep });

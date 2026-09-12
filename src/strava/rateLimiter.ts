@@ -100,7 +100,7 @@ export class RateLimitBudgeter {
   /** Pauses (or throws, for the daily window) if the last-observed usage is within budget limits. */
   private async waitForBudget(): Promise<void> {
     const daily = this.getState('daily');
-    if (daily && daily.usage_value >= daily.limit_value) {
+    if (daily && daily.usage_value >= daily.limit_value && !this.isFromPriorUtcDay(daily.observed_at)) {
       throw new DailyQuotaExhaustedError();
     }
 
@@ -112,6 +112,22 @@ export class RateLimitBudgeter {
       );
       await this.deps.sleep(waitMs);
     }
+  }
+
+  /**
+   * The persisted daily row never expires on its own — Strava resets the
+   * counter at midnight UTC, but nothing here observes that rollover unless
+   * a request actually goes out. Without this check, a usage=limit reading
+   * from a prior UTC day keeps throwing DailyQuotaExhaustedError forever.
+   */
+  private isFromPriorUtcDay(observedAt: string): boolean {
+    const observed = new Date(observedAt);
+    const now = new Date(this.deps.now());
+    return (
+      observed.getUTCFullYear() !== now.getUTCFullYear() ||
+      observed.getUTCMonth() !== now.getUTCMonth() ||
+      observed.getUTCDate() !== now.getUTCDate()
+    );
   }
 
   private msUntilNextShortWindow(): number {
