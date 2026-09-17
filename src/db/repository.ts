@@ -1,4 +1,4 @@
-import type { DB } from './index.js';
+import type { SqlBackend } from './backend.js';
 import { distanceMeters } from '../geometry/haversine.js';
 import type { ActivityRow, SegmentEffortRow, SegmentRow } from './types.js';
 
@@ -45,113 +45,106 @@ export interface SegmentDetail {
   effortCount: number | null;
 }
 
-/** All corpus reads/writes go through this class — no raw SQL elsewhere. */
+/**
+ * All corpus reads/writes go through this class — no raw SQL elsewhere.
+ * Backend-agnostic (see `backend.ts`): the same queries run against a local
+ * SQLite file, D1's Worker binding, or D1's HTTP API.
+ */
 export class Repository {
-  constructor(private readonly db: DB) {}
+  constructor(private readonly db: SqlBackend) {}
 
   // ---- Activities ----------------------------------------------------
 
-  upsertActivityStub(id: number, name: string, startDate: string): void {
-    this.db
-      .prepare(
-        `INSERT INTO activities (id, name, start_date) VALUES (?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, start_date = excluded.start_date`,
-      )
-      .run(id, name, startDate);
+  async upsertActivityStub(id: number, name: string, startDate: string): Promise<void> {
+    await this.db.run(
+      `INSERT INTO activities (id, name, start_date) VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, start_date = excluded.start_date`,
+      [id, name, startDate],
+    );
   }
 
-  markActivityProcessed(id: number): void {
-    this.db.prepare(`UPDATE activities SET processed_at = datetime('now') WHERE id = ?`).run(id);
+  async markActivityProcessed(id: number): Promise<void> {
+    await this.db.run(`UPDATE activities SET processed_at = datetime('now') WHERE id = ?`, [id]);
   }
 
-  unprocessedActivities(): ActivityRow[] {
-    return this.db
-      .prepare('SELECT * FROM activities WHERE processed_at IS NULL ORDER BY start_date ASC')
-      .all() as ActivityRow[];
+  async unprocessedActivities(): Promise<ActivityRow[]> {
+    return this.db.all<ActivityRow>('SELECT * FROM activities WHERE processed_at IS NULL ORDER BY start_date ASC');
   }
 
-  activityCount(): { total: number; processed: number } {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as total, COUNT(processed_at) as processed FROM activities')
-      .get() as { total: number; processed: number };
-    return row;
+  async activityCount(): Promise<{ total: number; processed: number }> {
+    const row = await this.db.get<{ total: number; processed: number }>(
+      'SELECT COUNT(*) as total, COUNT(processed_at) as processed FROM activities',
+    );
+    return row ?? { total: 0, processed: 0 };
   }
 
-  latestActivityStartDate(): string | undefined {
-    const row = this.db.prepare('SELECT MAX(start_date) as latest FROM activities').get() as {
-      latest: string | null;
-    };
-    return row.latest ?? undefined;
+  async latestActivityStartDate(): Promise<string | undefined> {
+    const row = await this.db.get<{ latest: string | null }>('SELECT MAX(start_date) as latest FROM activities');
+    return row?.latest ?? undefined;
   }
 
   // ---- Segments --------------------------------------------------------
 
   /** Creates a segment row from effort/starred data if absent; never overwrites fields already known. */
-  upsertSegmentStub(stub: SegmentStub): void {
-    this.db
-      .prepare(
-        `INSERT INTO segments (id, name, distance_m, average_grade, start_lat, start_lng, end_lat, end_lng, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(id) DO UPDATE SET
-           name = excluded.name,
-           distance_m = COALESCE(segments.distance_m, excluded.distance_m),
-           average_grade = COALESCE(segments.average_grade, excluded.average_grade),
-           start_lat = COALESCE(segments.start_lat, excluded.start_lat),
-           start_lng = COALESCE(segments.start_lng, excluded.start_lng),
-           end_lat = COALESCE(segments.end_lat, excluded.end_lat),
-           end_lng = COALESCE(segments.end_lng, excluded.end_lng),
-           updated_at = datetime('now')`,
-      )
-      .run(stub.id, stub.name, stub.distanceM, stub.averageGrade, stub.startLat, stub.startLng, stub.endLat, stub.endLng);
+  async upsertSegmentStub(stub: SegmentStub): Promise<void> {
+    await this.db.run(
+      `INSERT INTO segments (id, name, distance_m, average_grade, start_lat, start_lng, end_lat, end_lng, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         distance_m = COALESCE(segments.distance_m, excluded.distance_m),
+         average_grade = COALESCE(segments.average_grade, excluded.average_grade),
+         start_lat = COALESCE(segments.start_lat, excluded.start_lat),
+         start_lng = COALESCE(segments.start_lng, excluded.start_lng),
+         end_lat = COALESCE(segments.end_lat, excluded.end_lat),
+         end_lng = COALESCE(segments.end_lng, excluded.end_lng),
+         updated_at = datetime('now')`,
+      [stub.id, stub.name, stub.distanceM, stub.averageGrade, stub.startLat, stub.startLng, stub.endLat, stub.endLng],
+    );
   }
 
-  markSegmentStarred(id: number): void {
-    this.db.prepare(`UPDATE segments SET starred = 1, updated_at = datetime('now') WHERE id = ?`).run(id);
+  async markSegmentStarred(id: number): Promise<void> {
+    await this.db.run(`UPDATE segments SET starred = 1, updated_at = datetime('now') WHERE id = ?`, [id]);
   }
 
-  markSegmentHasBaseline(id: number): void {
-    this.db
-      .prepare(`UPDATE segments SET has_baseline = 1, updated_at = datetime('now') WHERE id = ?`)
-      .run(id);
+  async markSegmentHasBaseline(id: number): Promise<void> {
+    await this.db.run(`UPDATE segments SET has_baseline = 1, updated_at = datetime('now') WHERE id = ?`, [id]);
   }
 
-  refreshBestKomRank(segmentId: number): void {
-    this.db
-      .prepare(
-        `UPDATE segments SET best_kom_rank = (
-           SELECT MIN(kom_rank) FROM segment_efforts WHERE segment_id = ? AND kom_rank IS NOT NULL
-         ), effort_count = (
-           SELECT COUNT(*) FROM segment_efforts WHERE segment_id = ?
-         ), updated_at = datetime('now')
-         WHERE id = ?`,
-      )
-      .run(segmentId, segmentId, segmentId);
+  async refreshBestKomRank(segmentId: number): Promise<void> {
+    await this.db.run(
+      `UPDATE segments SET best_kom_rank = (
+         SELECT MIN(kom_rank) FROM segment_efforts WHERE segment_id = ? AND kom_rank IS NOT NULL
+       ), effort_count = (
+         SELECT COUNT(*) FROM segment_efforts WHERE segment_id = ?
+       ), updated_at = datetime('now')
+       WHERE id = ?`,
+      [segmentId, segmentId, segmentId],
+    );
   }
 
-  applyEnrichment(detail: SegmentDetail, komFetchedAt: string): void {
-    this.db
-      .prepare(
-        `UPDATE segments SET
-           polyline = COALESCE(polyline, ?),
-           distance_m = COALESCE(distance_m, ?),
-           average_grade = COALESCE(average_grade, ?),
-           elevation_high = COALESCE(elevation_high, ?),
-           elevation_low = COALESCE(elevation_low, ?),
-           start_lat = COALESCE(start_lat, ?),
-           start_lng = COALESCE(start_lng, ?),
-           end_lat = COALESCE(end_lat, ?),
-           end_lng = COALESCE(end_lng, ?),
-           kom_seconds = ?,
-           kom_fetched_at = ?,
-           pr_seconds = COALESCE(?, pr_seconds),
-           pr_activity_id = COALESCE(?, pr_activity_id),
-           pr_start_date = COALESCE(?, pr_start_date),
-           effort_count = COALESCE(?, effort_count),
-           detail_fetched_at = datetime('now'),
-           updated_at = datetime('now')
-         WHERE id = ?`,
-      )
-      .run(
+  async applyEnrichment(detail: SegmentDetail, komFetchedAt: string): Promise<void> {
+    await this.db.run(
+      `UPDATE segments SET
+         polyline = COALESCE(polyline, ?),
+         distance_m = COALESCE(distance_m, ?),
+         average_grade = COALESCE(average_grade, ?),
+         elevation_high = COALESCE(elevation_high, ?),
+         elevation_low = COALESCE(elevation_low, ?),
+         start_lat = COALESCE(start_lat, ?),
+         start_lng = COALESCE(start_lng, ?),
+         end_lat = COALESCE(end_lat, ?),
+         end_lng = COALESCE(end_lng, ?),
+         kom_seconds = ?,
+         kom_fetched_at = ?,
+         pr_seconds = COALESCE(?, pr_seconds),
+         pr_activity_id = COALESCE(?, pr_activity_id),
+         pr_start_date = COALESCE(?, pr_start_date),
+         effort_count = COALESCE(?, effort_count),
+         detail_fetched_at = datetime('now'),
+         updated_at = datetime('now')
+       WHERE id = ?`,
+      [
         detail.polyline,
         detail.distanceM,
         detail.averageGrade,
@@ -168,57 +161,61 @@ export class Repository {
         detail.prStartDate,
         detail.effortCount,
         detail.id,
-      );
+      ],
+    );
   }
 
-  applyGeometry(
+  async applyGeometry(
     id: number,
     bearingDeg: number,
     directionality: number,
     approximate: boolean,
     windNeutral: boolean,
-  ): void {
-    this.db
-      .prepare(
-        `UPDATE segments SET bearing_deg = ?, directionality = ?, geometry_approximate = ?, wind_neutral = ?, updated_at = datetime('now')
-         WHERE id = ?`,
-      )
-      .run(bearingDeg, directionality, approximate ? 1 : 0, windNeutral ? 1 : 0, id);
+  ): Promise<void> {
+    await this.db.run(
+      `UPDATE segments SET bearing_deg = ?, directionality = ?, geometry_approximate = ?, wind_neutral = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+      [bearingDeg, directionality, approximate ? 1 : 0, windNeutral ? 1 : 0, id],
+    );
   }
 
-  segmentsLackingDetail(): SegmentRow[] {
-    return this.db.prepare('SELECT * FROM segments WHERE detail_fetched_at IS NULL').all() as SegmentRow[];
+  async segmentsLackingDetail(): Promise<SegmentRow[]> {
+    return this.db.all<SegmentRow>('SELECT * FROM segments WHERE detail_fetched_at IS NULL');
   }
 
-  segmentsWithStaleKom(freshnessDays: number): SegmentRow[] {
-    return this.db
-      .prepare(
-        `SELECT * FROM segments
-         WHERE detail_fetched_at IS NOT NULL
-           AND kom_seconds IS NOT NULL
-           AND kom_fetched_at IS NOT NULL
-           AND julianday('now') - julianday(kom_fetched_at) > ?`,
-      )
-      .all(freshnessDays) as SegmentRow[];
+  async segmentsWithStaleKom(freshnessDays: number): Promise<SegmentRow[]> {
+    return this.db.all<SegmentRow>(
+      `SELECT * FROM segments
+       WHERE detail_fetched_at IS NOT NULL
+         AND kom_seconds IS NOT NULL
+         AND kom_fetched_at IS NOT NULL
+         AND julianday('now') - julianday(kom_fetched_at) > ?`,
+      [freshnessDays],
+    );
   }
 
-  getSegment(id: number): SegmentRow | undefined {
-    return this.db.prepare('SELECT * FROM segments WHERE id = ?').get(id) as SegmentRow | undefined;
+  async getSegment(id: number): Promise<SegmentRow | undefined> {
+    return this.db.get<SegmentRow>('SELECT * FROM segments WHERE id = ?', [id]);
   }
 
-  /** R*Tree bounding-box prefilter, then an exact great-circle distance filter/sort. */
-  segmentsWithinRadius(lat: number, lng: number, radiusM: number): NearbySegment[] {
+  /**
+   * Indexed bounding-box prefilter (`idx_segments_lat_lng`), then an exact
+   * great-circle distance filter/sort in application code. Previously an
+   * R*Tree virtual table did the prefilter, but D1 doesn't support SQLite's
+   * rtree module — a plain range scan is just as fast at this corpus's size
+   * (thousands, not millions, of segments), so both backends use it.
+   */
+  async segmentsWithinRadius(lat: number, lng: number, radiusM: number): Promise<NearbySegment[]> {
     const metresPerDegreeLat = 111_320;
     const latDelta = radiusM / metresPerDegreeLat;
     const cosLat = Math.cos((lat * Math.PI) / 180);
     const lngDelta = radiusM / (metresPerDegreeLat * (Math.abs(cosLat) > 1e-9 ? cosLat : 1e-9));
 
-    const candidates = this.db
-      .prepare(
-        `SELECT s.* FROM segment_rtree r JOIN segments s ON s.id = r.id
-         WHERE r.min_lat >= ? AND r.max_lat <= ? AND r.min_lng >= ? AND r.max_lng <= ?`,
-      )
-      .all(lat - latDelta, lat + latDelta, lng - lngDelta, lng + lngDelta) as SegmentRow[];
+    const candidates = await this.db.all<SegmentRow>(
+      `SELECT * FROM segments
+       WHERE start_lat BETWEEN ? AND ? AND start_lng BETWEEN ? AND ?`,
+      [lat - latDelta, lat + latDelta, lng - lngDelta, lng + lngDelta],
+    );
 
     const withDistance: NearbySegment[] = candidates
       .filter((s) => s.start_lat !== null && s.start_lng !== null)
@@ -232,36 +229,29 @@ export class Repository {
 
   // ---- Efforts -----------------------------------------------------------
 
-  insertEffort(effort: EffortRecord): void {
-    this.db
-      .prepare(
-        `INSERT INTO segment_efforts (id, segment_id, activity_id, elapsed_time_s, start_date, pr_rank, kom_rank)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           elapsed_time_s = excluded.elapsed_time_s,
-           pr_rank = excluded.pr_rank,
-           kom_rank = excluded.kom_rank`,
-      )
-      .run(
-        effort.id,
-        effort.segmentId,
-        effort.activityId,
-        effort.elapsedTimeS,
-        effort.startDate,
-        effort.prRank,
-        effort.komRank,
-      );
+  async insertEffort(effort: EffortRecord): Promise<void> {
+    await this.db.run(
+      `INSERT INTO segment_efforts (id, segment_id, activity_id, elapsed_time_s, start_date, pr_rank, kom_rank)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         elapsed_time_s = excluded.elapsed_time_s,
+         pr_rank = excluded.pr_rank,
+         kom_rank = excluded.kom_rank`,
+      [effort.id, effort.segmentId, effort.activityId, effort.elapsedTimeS, effort.startDate, effort.prRank, effort.komRank],
+    );
   }
 
-  effortsForSegment(segmentId: number): SegmentEffortRow[] {
-    return this.db
-      .prepare('SELECT * FROM segment_efforts WHERE segment_id = ? ORDER BY start_date ASC')
-      .all(segmentId) as SegmentEffortRow[];
+  async effortsForSegment(segmentId: number): Promise<SegmentEffortRow[]> {
+    return this.db.all<SegmentEffortRow>(
+      'SELECT * FROM segment_efforts WHERE segment_id = ? ORDER BY start_date ASC',
+      [segmentId],
+    );
   }
 
-  bestEffortForSegment(segmentId: number): SegmentEffortRow | undefined {
-    return this.db
-      .prepare('SELECT * FROM segment_efforts WHERE segment_id = ? ORDER BY elapsed_time_s ASC LIMIT 1')
-      .get(segmentId) as SegmentEffortRow | undefined;
+  async bestEffortForSegment(segmentId: number): Promise<SegmentEffortRow | undefined> {
+    return this.db.get<SegmentEffortRow>(
+      'SELECT * FROM segment_efforts WHERE segment_id = ? ORDER BY elapsed_time_s ASC LIMIT 1',
+      [segmentId],
+    );
   }
 }

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDatabase, type DB } from '../src/db/index.js';
+import { openLocalBackend, type DB } from '../src/db/index.js';
 import { Repository } from '../src/db/repository.js';
 import { enrichSegments } from '../src/sync/enrichment.js';
 import { komStatus, parseKomDuration } from '../src/segment/komStatus.js';
@@ -67,8 +67,9 @@ describe('enrichSegments', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'segment-hunter-enrich-'));
-    db = openDatabase(join(dir, 'test.db'));
-    repo = new Repository(db);
+    const opened = openLocalBackend(join(dir, 'test.db'));
+    db = opened.db;
+    repo = new Repository(opened.backend);
   });
 
   afterEach(() => {
@@ -77,8 +78,8 @@ describe('enrichSegments', () => {
   });
 
   it('enriches nearest-to-home segments first and persists all detail fields', async () => {
-    repo.upsertSegmentStub({ id: 1, name: 'Far', distanceM: null, averageGrade: null, startLat: 51.9, startLng: -0.5, endLat: null, endLng: null });
-    repo.upsertSegmentStub({ id: 2, name: 'Near', distanceM: null, averageGrade: null, startLat: 51.501, startLng: -0.101, endLat: null, endLng: null });
+    await repo.upsertSegmentStub({ id: 1, name: 'Far', distanceM: null, averageGrade: null, startLat: 51.9, startLng: -0.5, endLat: null, endLng: null });
+    await repo.upsertSegmentStub({ id: 2, name: 'Near', distanceM: null, averageGrade: null, startLat: 51.501, startLng: -0.101, endLat: null, endLng: null });
 
     const client = new FakeStravaClient(
       new Map([
@@ -91,7 +92,7 @@ describe('enrichSegments', () => {
     expect(count).toBe(2);
     expect((client as unknown as FakeStravaClient).calls).toEqual([2, 1]);
 
-    const enriched = repo.getSegment(2);
+    const enriched = await repo.getSegment(2);
     expect(enriched?.polyline).toBe('abc');
     expect(enriched?.kom_seconds).toBe(306);
     expect(enriched?.pr_seconds).toBe(310);
@@ -100,7 +101,7 @@ describe('enrichSegments', () => {
   });
 
   it('re-queues segments whose KOM has gone stale, without re-enriching fresh geometry', async () => {
-    repo.upsertSegmentStub({ id: 1, name: 'S', distanceM: null, averageGrade: null, startLat: 51.5, startLng: -0.1, endLat: null, endLng: null });
+    await repo.upsertSegmentStub({ id: 1, name: 'S', distanceM: null, averageGrade: null, startLat: 51.5, startLng: -0.1, endLat: null, endLng: null });
     const client = new FakeStravaClient(new Map([[1, detailFixture({ id: 1 })]])) as unknown as StravaReadClient;
     await enrichSegments(client, repo, { lat: 51.5, lng: -0.1 }, 14, 0.5);
 
@@ -113,6 +114,6 @@ describe('enrichSegments', () => {
     const count = await enrichSegments(updatedClient, repo, { lat: 51.5, lng: -0.1 }, 14, 0.5);
 
     expect(count).toBe(1);
-    expect(repo.getSegment(1)?.kom_seconds).toBe(300);
+    expect((await repo.getSegment(1))?.kom_seconds).toBe(300);
   });
 });

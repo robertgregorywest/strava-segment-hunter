@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config/index.js';
-import { openDatabase, type DB } from '../src/db/index.js';
+import { openLocalBackend, type DB } from '../src/db/index.js';
+import type { SqlBackend } from '../src/db/backend.js';
 import { Repository, type SegmentDetail } from '../src/db/repository.js';
 import { ForecastHorizonExceededError, OpenMeteoClient } from '../src/wind/openMeteoClient.js';
 import { SearchService } from '../src/search/searchService.js';
@@ -41,8 +42,8 @@ interface SegmentFixture {
   hasBaseline: boolean;
 }
 
-function seedSegment(repo: Repository, f: SegmentFixture): void {
-  repo.upsertSegmentStub({
+async function seedSegment(repo: Repository, f: SegmentFixture): Promise<void> {
+  await repo.upsertSegmentStub({
     id: f.id,
     name: f.name,
     distanceM: null,
@@ -69,12 +70,12 @@ function seedSegment(repo: Repository, f: SegmentFixture): void {
     prStartDate: f.prStartDate,
     effortCount: f.hasBaseline ? 1 : null,
   };
-  repo.applyEnrichment(detail, new Date().toISOString());
-  repo.applyGeometry(f.id, f.bearingDeg, f.directionality, false, f.windNeutral);
-  if (f.hasBaseline) repo.markSegmentHasBaseline(f.id);
+  await repo.applyEnrichment(detail, new Date().toISOString());
+  await repo.applyGeometry(f.id, f.bearingDeg, f.directionality, false, f.windNeutral);
+  if (f.hasBaseline) await repo.markSegmentHasBaseline(f.id);
   if (f.bestKomRank !== null) {
-    repo.upsertActivityStub(f.id * 100, `Activity for ${f.name}`, f.prStartDate ?? new Date().toISOString());
-    repo.insertEffort({
+    await repo.upsertActivityStub(f.id * 100, `Activity for ${f.name}`, f.prStartDate ?? new Date().toISOString());
+    await repo.insertEffort({
       id: f.id * 100,
       segmentId: f.id,
       activityId: f.id * 100,
@@ -83,7 +84,7 @@ function seedSegment(repo: Repository, f: SegmentFixture): void {
       prRank: 1,
       komRank: f.bestKomRank,
     });
-    repo.refreshBestKomRank(f.id);
+    await repo.refreshBestKomRank(f.id);
   }
 }
 
@@ -106,12 +107,15 @@ function windFetchMock(windSpeedMs: number, windDirectionDeg: number) {
 describe('SearchService', () => {
   let dir: string;
   let db: DB;
+  let backend: SqlBackend;
   let repo: Repository;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'segment-hunter-search-'));
-    db = openDatabase(join(dir, 'test.db'));
-    repo = new Repository(db);
+    const opened = openLocalBackend(join(dir, 'test.db'));
+    db = opened.db;
+    backend = opened.backend;
+    repo = new Repository(backend);
   });
 
   afterEach(() => {
@@ -120,7 +124,7 @@ describe('SearchService', () => {
   });
 
   it('returns nearby segments with distance from the search location, defaulting to home', async () => {
-    seedSegment(repo, {
+    await seedSegment(repo, {
       id: 1,
       name: 'Near',
       startLat: 51.501,
@@ -137,7 +141,7 @@ describe('SearchService', () => {
       hasBaseline: true,
     });
 
-    const weather = new OpenMeteoClient(db, 60, windFetchMock(3, 139.3) as unknown as typeof fetch);
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(3, 139.3) as unknown as typeof fetch);
     const service = new SearchService(repo, weather, testConfig());
 
     const result = await service.search({ radiusM: 2000, targetDate: '2026-01-05' });
@@ -150,7 +154,7 @@ describe('SearchService', () => {
   });
 
   it('combines filters for length, gradient and kom rank', async () => {
-    seedSegment(repo, {
+    await seedSegment(repo, {
       id: 1,
       name: 'Short flat',
       startLat: 51.501,
@@ -166,7 +170,7 @@ describe('SearchService', () => {
       bestKomRank: 20,
       hasBaseline: true,
     });
-    seedSegment(repo, {
+    await seedSegment(repo, {
       id: 2,
       name: 'Long steep',
       startLat: 51.502,
@@ -183,7 +187,7 @@ describe('SearchService', () => {
       hasBaseline: true,
     });
 
-    const weather = new OpenMeteoClient(db, 60, windFetchMock(3, 270) as unknown as typeof fetch);
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(3, 270) as unknown as typeof fetch);
     const service = new SearchService(repo, weather, testConfig());
 
     const result = await service.search({
@@ -198,7 +202,7 @@ describe('SearchService', () => {
   });
 
   it('suppresses projected benefit for wind-neutral segments', async () => {
-    seedSegment(repo, {
+    await seedSegment(repo, {
       id: 1,
       name: 'Loop',
       startLat: 51.501,
@@ -215,7 +219,7 @@ describe('SearchService', () => {
       hasBaseline: true,
     });
 
-    const weather = new OpenMeteoClient(db, 60, windFetchMock(5, 90) as unknown as typeof fetch);
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(5, 90) as unknown as typeof fetch);
     const service = new SearchService(repo, weather, testConfig());
 
     const result = await service.search({ radiusM: 2000, targetDate: '2026-01-05' });
@@ -226,7 +230,7 @@ describe('SearchService', () => {
   });
 
   it('suppresses gap-to-KOM when the athlete has no baseline effort', async () => {
-    seedSegment(repo, {
+    await seedSegment(repo, {
       id: 1,
       name: 'Never ridden',
       startLat: 51.501,
@@ -243,7 +247,7 @@ describe('SearchService', () => {
       hasBaseline: false,
     });
 
-    const weather = new OpenMeteoClient(db, 60, windFetchMock(5, 270) as unknown as typeof fetch);
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(5, 270) as unknown as typeof fetch);
     const service = new SearchService(repo, weather, testConfig());
 
     const result = await service.search({ radiusM: 2000, targetDate: '2026-01-05' });
@@ -254,7 +258,7 @@ describe('SearchService', () => {
   });
 
   it('ranks by projected margin by default, and supports alternative orderings', async () => {
-    seedSegment(repo, {
+    await seedSegment(repo, {
       id: 1,
       name: 'Comfortable margin',
       startLat: 51.501,
@@ -270,7 +274,7 @@ describe('SearchService', () => {
       bestKomRank: 2,
       hasBaseline: true,
     });
-    seedSegment(repo, {
+    await seedSegment(repo, {
       id: 2,
       name: 'Far off KOM',
       startLat: 51.502,
@@ -287,7 +291,7 @@ describe('SearchService', () => {
       hasBaseline: true,
     });
 
-    const weather = new OpenMeteoClient(db, 60, windFetchMock(3, 270) as unknown as typeof fetch);
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(3, 270) as unknown as typeof fetch);
     const service = new SearchService(repo, weather, testConfig());
 
     const byMargin = await service.search({ radiusM: 5000, targetDate: '2026-01-05' });
@@ -298,7 +302,7 @@ describe('SearchService', () => {
   });
 
   it('returns an explanatory empty result when nothing is in range', async () => {
-    const weather = new OpenMeteoClient(db, 60);
+    const weather = new OpenMeteoClient(backend, 60);
     const service = new SearchService(repo, weather, testConfig());
 
     const result = await service.search({ radiusM: 500 });
@@ -308,7 +312,7 @@ describe('SearchService', () => {
   });
 
   it('rejects a target date beyond the forecast horizon', async () => {
-    const weather = new OpenMeteoClient(db, 60);
+    const weather = new OpenMeteoClient(backend, 60);
     const service = new SearchService(repo, weather, testConfig());
 
     await expect(service.search({ radiusM: 2000, targetDate: '2099-01-01' })).rejects.toBeInstanceOf(

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/config/index.js';
-import { openDatabase, type DB } from '../src/db/index.js';
+import { openLocalBackend, type DB } from '../src/db/index.js';
+import type { SqlBackend } from '../src/db/backend.js';
 import { Repository, type SegmentDetail } from '../src/db/repository.js';
 import { OpenMeteoClient } from '../src/wind/openMeteoClient.js';
 import { SegmentDetailService } from '../src/search/segmentDetailService.js';
@@ -40,12 +41,15 @@ function windFetchMock(windSpeedMs: number, windDirectionDeg: number) {
 describe('SegmentDetailService', () => {
   let dir: string;
   let db: DB;
+  let backend: SqlBackend;
   let repo: Repository;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'segment-hunter-detail-'));
-    db = openDatabase(join(dir, 'test.db'));
-    repo = new Repository(db);
+    const opened = openLocalBackend(join(dir, 'test.db'));
+    db = opened.db;
+    backend = opened.backend;
+    repo = new Repository(backend);
   });
 
   afterEach(() => {
@@ -53,8 +57,8 @@ describe('SegmentDetailService', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function seed(overrides: Partial<SegmentDetail> = {}) {
-    repo.upsertSegmentStub({
+  async function seed(overrides: Partial<SegmentDetail> = {}) {
+    await repo.upsertSegmentStub({
       id: 1,
       name: 'Test',
       distanceM: null,
@@ -82,20 +86,20 @@ describe('SegmentDetailService', () => {
       effortCount: 3,
       ...overrides,
     };
-    repo.applyEnrichment(detail, new Date().toISOString());
-    repo.applyGeometry(1, 319.3, 0.97, false, false);
-    repo.markSegmentHasBaseline(1);
+    await repo.applyEnrichment(detail, new Date().toISOString());
+    await repo.applyGeometry(1, 319.3, 0.97, false, false);
+    await repo.markSegmentHasBaseline(1);
   }
 
   it('returns undefined for an unknown segment', async () => {
-    const weather = new OpenMeteoClient(db, 60);
+    const weather = new OpenMeteoClient(backend, 60);
     const service = new SegmentDetailService(repo, weather, testConfig());
     expect(await service.getDetail(999)).toBeUndefined();
   });
 
   it('computes the ideal wind-from direction as the reciprocal of bearing', async () => {
-    seed();
-    const weather = new OpenMeteoClient(db, 60, windFetchMock(3, 139.3) as unknown as typeof fetch);
+    await seed();
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(3, 139.3) as unknown as typeof fetch);
     const service = new SegmentDetailService(repo, weather, testConfig());
 
     const detail = await service.getDetail(1, undefined, 1);
@@ -103,8 +107,8 @@ describe('SegmentDetailService', () => {
   });
 
   it('produces hourly projections and highlights the fastest hours', async () => {
-    seed();
-    const weather = new OpenMeteoClient(db, 60, windFetchMock(4, 139.3) as unknown as typeof fetch);
+    await seed();
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(4, 139.3) as unknown as typeof fetch);
     const service = new SegmentDetailService(repo, weather, testConfig());
 
     const detail = await service.getDetail(1, undefined, 1);
@@ -115,8 +119,8 @@ describe('SegmentDetailService', () => {
   });
 
   it('reports a message instead of projections when there is no baseline effort', async () => {
-    seed({ prSeconds: null, prActivityId: null, prStartDate: null, effortCount: null });
-    const weather = new OpenMeteoClient(db, 60);
+    await seed({ prSeconds: null, prActivityId: null, prStartDate: null, effortCount: null });
+    const weather = new OpenMeteoClient(backend, 60);
     const service = new SegmentDetailService(repo, weather, testConfig());
 
     const detail = await service.getDetail(1, undefined, 1);

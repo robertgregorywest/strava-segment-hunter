@@ -46,8 +46,8 @@ export async function enrichSegments(
   komFreshnessDays: number,
   windNeutralThreshold: number,
 ): Promise<number> {
-  const needsDetail = repo.segmentsLackingDetail();
-  const needsKomRefresh = repo.segmentsWithStaleKom(komFreshnessDays);
+  const needsDetail = await repo.segmentsLackingDetail();
+  const needsKomRefresh = await repo.segmentsWithStaleKom(komFreshnessDays);
 
   const queue = new Map<number, SegmentRow>();
   for (const segment of [...needsDetail, ...needsKomRefresh]) {
@@ -69,10 +69,10 @@ export async function enrichSegments(
     try {
       const detail = await client.getSegment(segment.id);
       const segmentDetail = toSegmentDetail(segment.id, detail);
-      repo.applyEnrichment(segmentDetail, new Date().toISOString());
+      await repo.applyEnrichment(segmentDetail, new Date().toISOString());
 
       // Geometry is immutable once known — only compute it the first time.
-      const alreadyHasGeometry = repo.getSegment(segment.id)?.bearing_deg !== null;
+      const alreadyHasGeometry = (await repo.getSegment(segment.id))?.bearing_deg !== null;
       if (!alreadyHasGeometry) {
         const geometry = analyzeSegmentGeometry(
           segmentDetail.polyline,
@@ -84,7 +84,7 @@ export async function enrichSegments(
             : null,
         );
         if (geometry) {
-          repo.applyGeometry(
+          await repo.applyGeometry(
             segment.id,
             geometry.bearingDeg,
             geometry.directionality,

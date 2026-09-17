@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDatabase, type DB } from '../src/db/index.js';
+import { openLocalBackend, type DB } from '../src/db/index.js';
 import { Repository } from '../src/db/repository.js';
 import { SyncState } from '../src/db/syncState.js';
 import { listActivities, processUnprocessedActivities } from '../src/sync/backfill.js';
@@ -62,9 +62,10 @@ describe('sync', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'segment-hunter-sync-'));
-    db = openDatabase(join(dir, 'test.db'));
-    repo = new Repository(db);
-    state = new SyncState(db);
+    const opened = openLocalBackend(join(dir, 'test.db'));
+    db = opened.db;
+    repo = new Repository(opened.backend);
+    state = new SyncState(opened.backend);
   });
 
   afterEach(() => {
@@ -82,7 +83,7 @@ describe('sync', () => {
 
     const first = await listActivities(client, repo, state);
     expect(first).toBe(2);
-    expect(repo.activityCount()).toEqual({ total: 2, processed: 0 });
+    expect(await repo.activityCount()).toEqual({ total: 2, processed: 0 });
 
     const second = await listActivities(client, repo, state);
     expect(second).toBe(0); // already marked complete, no further calls
@@ -116,11 +117,11 @@ describe('sync', () => {
     const processed = await processUnprocessedActivities(client, repo);
     expect(processed).toBe(2);
 
-    const segment = repo.getSegment(9);
+    const segment = await repo.getSegment(9);
     expect(segment?.has_baseline).toBe(1);
     expect(segment?.best_kom_rank).toBe(2);
     expect(segment?.effort_count).toBe(2);
-    expect(repo.effortsForSegment(9)).toHaveLength(2);
+    expect(await repo.effortsForSegment(9)).toHaveLength(2);
 
     // Re-running processes nothing further — activities are marked processed.
     const secondRun = await processUnprocessedActivities(client, repo);
@@ -139,7 +140,7 @@ describe('sync', () => {
     client.activityDetail.set(2, { id: 2, name: 'Ride 2', start_date: '2024-01-02T00:00:00Z', segment_efforts: [] });
 
     await listActivities(client, repo, state);
-    repo.markActivityProcessed(1); // simulate activity 1 completed before an interruption
+    await repo.markActivityProcessed(1); // simulate activity 1 completed before an interruption
 
     const resumed = await processUnprocessedActivities(client, repo);
     expect(resumed).toBe(1);
@@ -153,7 +154,7 @@ describe('sync', () => {
 
     await ingestStarredSegments(client, repo);
 
-    const segment = repo.getSegment(42);
+    const segment = await repo.getSegment(42);
     expect(segment?.starred).toBe(1);
     expect(segment?.has_baseline).toBe(0);
   });

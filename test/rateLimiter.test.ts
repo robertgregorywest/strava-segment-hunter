@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openDatabase, type DB } from '../src/db/index.js';
+import { openLocalBackend, type DB } from '../src/db/index.js';
+import type { SqlBackend } from '../src/db/backend.js';
 import { DailyQuotaExhaustedError, RateLimitBudgeter } from '../src/strava/rateLimiter.js';
 
 function headersResponse(status: number, shortUsage: number, shortLimit: number, dailyUsage: number, dailyLimit: number, extra?: HeadersInit) {
@@ -19,10 +20,13 @@ function headersResponse(status: number, shortUsage: number, shortLimit: number,
 describe('RateLimitBudgeter', () => {
   let dir: string;
   let db: DB;
+  let backend: SqlBackend;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'segment-hunter-rl-'));
-    db = openDatabase(join(dir, 'test.db'));
+    const opened = openLocalBackend(join(dir, 'test.db'));
+    db = opened.db;
+    backend = opened.backend;
   });
 
   afterEach(() => {
@@ -31,7 +35,7 @@ describe('RateLimitBudgeter', () => {
   });
 
   it('records limit/usage from response headers as authoritative', async () => {
-    const budgeter = new RateLimitBudgeter(db, 0.9);
+    const budgeter = new RateLimitBudgeter(backend, 0.9);
     await budgeter.run(async () => headersResponse(200, 10, 200, 100, 2000));
 
     const short = db.prepare("SELECT * FROM rate_limit_state WHERE window = 'short'").get() as
@@ -48,7 +52,7 @@ describe('RateLimitBudgeter', () => {
 
     const fixedNow = Date.UTC(2026, 0, 1, 10, 5, 0); // 10:05:00 UTC -> next boundary 10:15:00
     const sleep = vi.fn(async () => {});
-    const budgeter = new RateLimitBudgeter(db, 0.9, { sleep, now: () => fixedNow });
+    const budgeter = new RateLimitBudgeter(backend, 0.9, { sleep, now: () => fixedNow });
 
     await budgeter.run(async () => headersResponse(200, 181, 200, 100, 2000));
 
@@ -62,7 +66,7 @@ describe('RateLimitBudgeter', () => {
     ).run();
 
     const fetchOnce = vi.fn();
-    const budgeter = new RateLimitBudgeter(db, 0.9);
+    const budgeter = new RateLimitBudgeter(backend, 0.9);
 
     await expect(budgeter.run(fetchOnce)).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
     expect(fetchOnce).not.toHaveBeenCalled();
@@ -75,7 +79,7 @@ describe('RateLimitBudgeter', () => {
 
     const fixedNow = Date.UTC(2026, 8, 12, 7, 31, 0); // 2026-09-12, a day after the reading above
     const fetchOnce = vi.fn(async () => headersResponse(200, 1, 200, 1, 2000));
-    const budgeter = new RateLimitBudgeter(db, 0.9, { now: () => fixedNow });
+    const budgeter = new RateLimitBudgeter(backend, 0.9, { now: () => fixedNow });
 
     await expect(budgeter.run(fetchOnce)).resolves.toBeInstanceOf(Response);
     expect(fetchOnce).toHaveBeenCalledTimes(1);
@@ -83,7 +87,7 @@ describe('RateLimitBudgeter', () => {
 
   it('retries with backoff on 429 and does not give up', async () => {
     const sleep = vi.fn(async () => {});
-    const budgeter = new RateLimitBudgeter(db, 0.9, { sleep });
+    const budgeter = new RateLimitBudgeter(backend, 0.9, { sleep });
 
     let calls = 0;
     const response = await budgeter.run(async () => {
@@ -99,7 +103,7 @@ describe('RateLimitBudgeter', () => {
 
   it('honors Retry-After on 429 when present', async () => {
     const sleep = vi.fn(async () => {});
-    const budgeter = new RateLimitBudgeter(db, 0.9, { sleep });
+    const budgeter = new RateLimitBudgeter(backend, 0.9, { sleep });
 
     let calls = 0;
     await budgeter.run(async () => {

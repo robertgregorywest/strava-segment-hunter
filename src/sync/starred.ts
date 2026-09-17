@@ -18,7 +18,7 @@ export async function ingestStarredSegments(client: StravaReadClient, repo: Repo
     if (segments.length === 0) break;
 
     for (const segment of segments) {
-      repo.upsertSegmentStub({
+      await repo.upsertSegmentStub({
         id: segment.id,
         name: segment.name,
         distanceM: segment.distance ?? null,
@@ -28,7 +28,7 @@ export async function ingestStarredSegments(client: StravaReadClient, repo: Repo
         endLat: segment.end_latlng?.[0] ?? null,
         endLng: segment.end_latlng?.[1] ?? null,
       });
-      repo.markSegmentStarred(segment.id);
+      await repo.markSegmentStarred(segment.id);
       total += 1;
     }
 

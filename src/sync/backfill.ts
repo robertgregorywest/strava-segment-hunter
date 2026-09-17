@@ -34,26 +34,26 @@ export async function listActivities(
   const cursorKey = options.cursorKey ?? 'activities_list_page';
   const completeKey = `${cursorKey}_complete`;
 
-  if (state.getBoolean(completeKey)) return 0;
+  if (await state.getBoolean(completeKey)) return 0;
 
-  let page = Number.parseInt(state.get(cursorKey) ?? '1', 10);
+  let page = Number.parseInt((await state.get(cursorKey)) ?? '1', 10);
   let total = 0;
 
   for (;;) {
     const activities = await client.listActivities(page, PER_PAGE, options.after);
     if (activities.length === 0) {
-      state.setBoolean(completeKey, true);
+      await state.setBoolean(completeKey, true);
       break;
     }
 
     for (const activity of activities) {
-      repo.upsertActivityStub(activity.id, activity.name, activity.start_date);
+      await repo.upsertActivityStub(activity.id, activity.name, activity.start_date);
       total += 1;
     }
 
     log(`Listed page ${page}: ${activities.length} activities (${total} total so far).`);
 
-    state.set(cursorKey, String(page + 1));
+    await state.set(cursorKey, String(page + 1));
     page += 1;
   }
 
@@ -69,7 +69,7 @@ export async function processUnprocessedActivities(
   client: StravaReadClient,
   repo: Repository,
 ): Promise<number> {
-  const pending = repo.unprocessedActivities();
+  const pending = await repo.unprocessedActivities();
   const total = pending.length;
   const startedAt = Date.now();
   let processed = 0;
@@ -83,8 +83,8 @@ export async function processUnprocessedActivities(
       const touchedSegments = new Set<number>();
 
       for (const effort of detail.segment_efforts ?? []) {
-        repo.upsertSegmentStub(toSegmentStub(effort.segment));
-        repo.insertEffort({
+        await repo.upsertSegmentStub(toSegmentStub(effort.segment));
+        await repo.insertEffort({
           id: effort.id,
           segmentId: effort.segment.id,
           activityId: activity.id,
@@ -93,15 +93,15 @@ export async function processUnprocessedActivities(
           prRank: effort.pr_rank,
           komRank: effort.kom_rank,
         });
-        repo.markSegmentHasBaseline(effort.segment.id);
+        await repo.markSegmentHasBaseline(effort.segment.id);
         touchedSegments.add(effort.segment.id);
       }
 
       for (const segmentId of touchedSegments) {
-        repo.refreshBestKomRank(segmentId);
+        await repo.refreshBestKomRank(segmentId);
       }
 
-      repo.markActivityProcessed(activity.id);
+      await repo.markActivityProcessed(activity.id);
       processed += 1;
     } catch (err) {
       // Left unprocessed — repo.unprocessedActivities() will retry it on the next run.

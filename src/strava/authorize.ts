@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { loadConfig } from '../config/index.js';
 import { describeCapabilityLoss, missingScopes } from './auth.js';
-import { TokenStore } from './tokenStore.js';
+import { FileTokenStore } from './tokenStore.js';
 
 const AUTHORIZE_URL = 'https://www.strava.com/oauth/authorize';
 const TOKEN_URL = 'https://www.strava.com/oauth/token';
@@ -48,8 +48,8 @@ async function main(): Promise<void> {
   const body = (await response.json()) as TokenResponse;
   const grantedScopes = scope.split(',').map((s) => s.trim()).filter(Boolean);
 
-  const store = new TokenStore(config.strava.tokenPath);
-  store.write({
+  const store = new FileTokenStore(config.strava.tokenPath);
+  await store.write({
     accessToken: body.access_token,
     refreshToken: body.refresh_token,
     expiresAt: body.expires_at,

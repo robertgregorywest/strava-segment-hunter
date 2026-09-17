@@ -1,4 +1,13 @@
 -- Core corpus tables.
+--
+-- This is the schema both store implementations run against: D1 in
+-- production, and a local SQLite file for dev/tests. It is applied to both
+-- from this file, so the two cannot drift.
+--
+-- No `segment_rtree` virtual table here (unlike the pre-D1 schema this
+-- replaces): D1 doesn't support SQLite's rtree module. Radius search instead
+-- does a plain indexed bounding-box scan over start_lat/start_lng — plenty
+-- fast at this corpus's size (thousands, not millions, of segments).
 
 CREATE TABLE activities (
   id INTEGER PRIMARY KEY,
@@ -48,6 +57,11 @@ CREATE TABLE segments (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Bounding-box prefilter for radius search (see repository.ts's
+-- segmentsWithinRadius): narrows candidates by lat/lng range before the
+-- exact great-circle distance filter runs in application code.
+CREATE INDEX idx_segments_lat_lng ON segments(start_lat, start_lng);
+
 CREATE TABLE segment_efforts (
   id INTEGER PRIMARY KEY,
   segment_id INTEGER NOT NULL REFERENCES segments(id),
@@ -61,33 +75,6 @@ CREATE TABLE segment_efforts (
 
 CREATE INDEX idx_segment_efforts_segment ON segment_efforts(segment_id);
 CREATE INDEX idx_segment_efforts_activity ON segment_efforts(activity_id);
-
--- Spatial index over segment start points for radius search.
-CREATE VIRTUAL TABLE segment_rtree USING rtree(
-  id,
-  min_lat, max_lat,
-  min_lng, max_lng
-);
-
-CREATE TRIGGER segments_rtree_ai AFTER INSERT ON segments
-WHEN NEW.start_lat IS NOT NULL AND NEW.start_lng IS NOT NULL
-BEGIN
-  INSERT INTO segment_rtree(id, min_lat, max_lat, min_lng, max_lng)
-  VALUES (NEW.id, NEW.start_lat, NEW.start_lat, NEW.start_lng, NEW.start_lng);
-END;
-
-CREATE TRIGGER segments_rtree_au AFTER UPDATE ON segments
-BEGIN
-  DELETE FROM segment_rtree WHERE id = OLD.id;
-  INSERT INTO segment_rtree(id, min_lat, max_lat, min_lng, max_lng)
-  SELECT NEW.id, NEW.start_lat, NEW.start_lat, NEW.start_lng, NEW.start_lng
-  WHERE NEW.start_lat IS NOT NULL AND NEW.start_lng IS NOT NULL;
-END;
-
-CREATE TRIGGER segments_rtree_ad AFTER DELETE ON segments
-BEGIN
-  DELETE FROM segment_rtree WHERE id = OLD.id;
-END;
 
 -- Generic key/value progress tracking (backfill cursor, incremental sync cursor, etc).
 CREATE TABLE sync_state (
@@ -124,4 +111,17 @@ CREATE TABLE historical_wind_cache (
   wind_speed_ms REAL,
   wind_direction_deg REAL,
   fetched_at TEXT NOT NULL
+);
+
+-- Strava OAuth tokens. Single row (id fixed at 1): replaces the local
+-- data/strava-tokens.json file, since the GitHub Actions runner that now
+-- performs sync is stateless between runs and needs a durable place to read
+-- and refresh the token from.
+CREATE TABLE oauth_tokens (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  access_token TEXT NOT NULL,
+  refresh_token TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  scope TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

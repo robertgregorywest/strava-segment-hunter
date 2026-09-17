@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openDatabase, type DB } from '../src/db/index.js';
+import { openLocalBackend, type DB } from '../src/db/index.js';
+import type { SqlBackend } from '../src/db/backend.js';
 import {
   ForecastHorizonExceededError,
   OpenMeteoClient,
@@ -26,10 +27,13 @@ function forecastResponse(date: string) {
 describe('OpenMeteoClient', () => {
   let dir: string;
   let db: DB;
+  let backend: SqlBackend;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'segment-hunter-wind-'));
-    db = openDatabase(join(dir, 'test.db'));
+    const opened = openLocalBackend(join(dir, 'test.db'));
+    db = opened.db;
+    backend = opened.backend;
   });
 
   afterEach(() => {
@@ -39,7 +43,7 @@ describe('OpenMeteoClient', () => {
 
   it('fetches and returns hourly forecast data', async () => {
     const fetchMock = vi.fn(async () => forecastResponse('2026-01-05'));
-    const client = new OpenMeteoClient(db, 60, fetchMock as unknown as typeof fetch);
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
 
     const hours = await client.getForecast(51.5, -0.1, '2026-01-05');
     expect(hours).toHaveLength(2);
@@ -49,7 +53,7 @@ describe('OpenMeteoClient', () => {
 
   it('serves cached forecast data within the cache window without a further request', async () => {
     const fetchMock = vi.fn(async () => forecastResponse('2026-01-05'));
-    const client = new OpenMeteoClient(db, 60, fetchMock as unknown as typeof fetch);
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
 
     await client.getForecast(51.5, -0.1, '2026-01-05');
     await client.getForecast(51.5, -0.1, '2026-01-05');
@@ -59,7 +63,7 @@ describe('OpenMeteoClient', () => {
 
   it('refetches once the cache window has elapsed', async () => {
     const fetchMock = vi.fn(async () => forecastResponse('2026-01-05'));
-    const client = new OpenMeteoClient(db, 0, fetchMock as unknown as typeof fetch); // 0-minute window
+    const client = new OpenMeteoClient(backend, 0, fetchMock as unknown as typeof fetch); // 0-minute window
 
     await client.getForecast(51.5, -0.1, '2026-01-05');
     await client.getForecast(51.5, -0.1, '2026-01-05');
@@ -68,7 +72,7 @@ describe('OpenMeteoClient', () => {
   });
 
   it('rejects a target date beyond the forecast horizon and reports the latest selectable date', async () => {
-    const client = new OpenMeteoClient(db, 60);
+    const client = new OpenMeteoClient(backend, 60);
     const now = new Date('2026-01-01T00:00:00Z');
 
     await expect(client.getForecast(51.5, -0.1, '2026-06-01', now)).rejects.toThrow(
@@ -80,7 +84,7 @@ describe('OpenMeteoClient', () => {
     const fetchMock = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
     });
-    const client = new OpenMeteoClient(db, 60, fetchMock as unknown as typeof fetch);
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
 
     await expect(client.getForecast(51.5, -0.1, '2026-01-05')).rejects.toBeInstanceOf(WeatherUnavailableError);
   });
@@ -99,7 +103,7 @@ describe('OpenMeteoClient', () => {
           { status: 200 },
         ),
     );
-    const client = new OpenMeteoClient(db, 60, fetchMock as unknown as typeof fetch);
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
 
     const wind = await client.getHistoricalWindAt(51.5, -0.1, '2024-06-01T08:05:00Z');
     expect(wind).toMatchObject({ windSpeedMs: 5, windDirectionDeg: 200 });
@@ -109,7 +113,7 @@ describe('OpenMeteoClient', () => {
     const fetchMock = vi.fn(async () => {
       throw new Error('down');
     });
-    const client = new OpenMeteoClient(db, 60, fetchMock as unknown as typeof fetch);
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
 
     const wind = await client.getHistoricalWindAt(51.5, -0.1, '2024-06-01T08:05:00Z');
     expect(wind).toBeUndefined();

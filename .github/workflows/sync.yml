@@ -1,0 +1,65 @@
+name: Sync
+
+# Resumes the Strava segment-hunter backfill once a day, shortly after
+# Strava's daily read quota rolls over at midnight UTC. This replaces the
+# local macOS cron job that used to do this (see BACKFILL_CRON.md).
+on:
+  schedule:
+    - cron: '5 0 * * *'
+  workflow_dispatch:
+
+# A slow run must not race the next one into conflicting writes, and must not
+# be cancelled by it either — cancelling mid-backfill would abandon whatever
+# activity it was partway through processing.
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # To push the heartbeat below. Nothing else here writes to the repository.
+    permissions:
+      contents: write
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sync into D1
+        run: npm run sync:backfill:d1
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          HOME_LAT: ${{ vars.HOME_LAT }}
+          HOME_LNG: ${{ vars.HOME_LNG }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      # GitHub disables a scheduled workflow after 60 days without repository
+      # activity. A dated file, committed once a day, counts as that activity.
+      #
+      # `always()`, because the 60 days do not pause while sync is broken: the
+      # one time the heartbeat must not stop is while something else has.
+      - name: Heartbeat
+        if: always()
+        run: |
+          date -u +%Y-%m-%d > .github/heartbeat
+          git add .github/heartbeat
+          if git diff --cached --quiet; then
+            echo "Already beaten today."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m 'Sync heartbeat'
+          git pull --rebase --quiet
+          git push

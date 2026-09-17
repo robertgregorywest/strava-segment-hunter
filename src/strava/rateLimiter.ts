@@ -1,4 +1,4 @@
-import type { DB } from '../db/index.js';
+import type { SqlBackend } from '../db/backend.js';
 import type { RateLimitStateRow } from '../db/types.js';
 import { log } from '../log.js';
 
@@ -29,7 +29,7 @@ export class RateLimitBudgeter {
   private readonly deps: Deps;
 
   constructor(
-    private readonly db: DB,
+    private readonly db: SqlBackend,
     private readonly pauseFraction: number,
     deps?: Partial<Deps>,
   ) {
@@ -45,7 +45,7 @@ export class RateLimitBudgeter {
 
     for (;;) {
       const response = await fetchOnce();
-      this.recordHeaders(response.headers);
+      await this.recordHeaders(response.headers);
 
       if (response.status !== 429) {
         return response;
@@ -61,7 +61,7 @@ export class RateLimitBudgeter {
     }
   }
 
-  private recordHeaders(headers: Headers): void {
+  private async recordHeaders(headers: Headers): Promise<void> {
     const limitHeader = headers.get('X-ReadRateLimit-Limit');
     const usageHeader = headers.get('X-ReadRateLimit-Usage');
     if (!limitHeader || !usageHeader) return;
@@ -71,40 +71,37 @@ export class RateLimitBudgeter {
     const observedAt = new Date(this.deps.now()).toISOString();
 
     if (shortLimit !== undefined && shortUsage !== undefined) {
-      this.upsert('short', shortLimit, shortUsage, observedAt);
+      await this.upsert('short', shortLimit, shortUsage, observedAt);
     }
     if (dailyLimit !== undefined && dailyUsage !== undefined) {
-      this.upsert('daily', dailyLimit, dailyUsage, observedAt);
+      await this.upsert('daily', dailyLimit, dailyUsage, observedAt);
     }
   }
 
-  private upsert(window: 'short' | 'daily', limit: number, usage: number, observedAt: string): void {
-    this.db
-      .prepare(
-        `INSERT INTO rate_limit_state (window, limit_value, usage_value, observed_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(window) DO UPDATE SET
-           limit_value = excluded.limit_value,
-           usage_value = excluded.usage_value,
-           observed_at = excluded.observed_at`,
-      )
-      .run(window, limit, usage, observedAt);
+  private async upsert(window: 'short' | 'daily', limit: number, usage: number, observedAt: string): Promise<void> {
+    await this.db.run(
+      `INSERT INTO rate_limit_state (window, limit_value, usage_value, observed_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(window) DO UPDATE SET
+         limit_value = excluded.limit_value,
+         usage_value = excluded.usage_value,
+         observed_at = excluded.observed_at`,
+      [window, limit, usage, observedAt],
+    );
   }
 
-  private getState(window: 'short' | 'daily'): RateLimitStateRow | undefined {
-    return this.db.prepare('SELECT * FROM rate_limit_state WHERE window = ?').get(window) as
-      | RateLimitStateRow
-      | undefined;
+  private async getState(window: 'short' | 'daily'): Promise<RateLimitStateRow | undefined> {
+    return this.db.get<RateLimitStateRow>('SELECT * FROM rate_limit_state WHERE window = ?', [window]);
   }
 
   /** Pauses (or throws, for the daily window) if the last-observed usage is within budget limits. */
   private async waitForBudget(): Promise<void> {
-    const daily = this.getState('daily');
+    const daily = await this.getState('daily');
     if (daily && daily.usage_value >= daily.limit_value && !this.isFromPriorUtcDay(daily.observed_at)) {
       throw new DailyQuotaExhaustedError();
     }
 
-    const short = this.getState('short');
+    const short = await this.getState('short');
     if (short && short.usage_value >= short.limit_value * this.pauseFraction) {
       const waitMs = this.msUntilNextShortWindow();
       log(

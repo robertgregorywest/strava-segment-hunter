@@ -1,9 +1,9 @@
-import type { Config } from '../config/index.js';
 import type { Repository } from '../db/repository.js';
 import { komStatus, type KomStatus } from '../segment/komStatus.js';
 import { WeatherUnavailableError, type OpenMeteoClient } from '../wind/openMeteoClient.js';
 import { calibratePower, gapToKomSeconds, projectTime, type ProjectionConfidence, type RiderParams } from '../wind/projection.js';
 import { resolvePrEffort } from './calibration.js';
+import type { SearchConfig } from './types.js';
 
 export interface SegmentSummary {
   id: number;
@@ -60,7 +60,7 @@ export class SegmentDetailService {
   constructor(
     private readonly repo: Repository,
     private readonly weather: OpenMeteoClient,
-    private readonly config: Config,
+    private readonly config: SearchConfig,
   ) {}
 
   async getDetail(
@@ -68,7 +68,7 @@ export class SegmentDetailService {
     riderParams?: RiderParams,
     horizonDays = 14,
   ): Promise<SegmentDetailResult | undefined> {
-    const segment = this.repo.getSegment(segmentId);
+    const segment = await this.repo.getSegment(segmentId);
     if (!segment) return undefined;
 
     const rider = riderParams ?? this.config.rider;
@@ -123,7 +123,7 @@ export class SegmentDetailService {
       };
     }
 
-    const pr = resolvePrEffort(this.repo, segment);
+    const pr = await resolvePrEffort(this.repo, segment);
     if (!pr) {
       return {
         segment: summary,

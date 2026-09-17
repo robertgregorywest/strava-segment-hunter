@@ -6,12 +6,16 @@
   "type": "module",
   "scripts": {
     "auth": "tsx src/strava/authorize.ts",
-    "sync": "tsx src/sync/index.ts",
-    "sync:backfill": "tsx src/sync/index.ts --backfill",
+    "sync": "tsx --env-file-if-exists=.env src/sync/index.ts",
+    "sync:backfill": "tsx --env-file-if-exists=.env src/sync/index.ts --backfill",
+    "sync:d1": "tsx --env-file-if-exists=.env --env-file-if-exists=.dev.vars src/sync/index.ts --store d1",
+    "sync:backfill:d1": "tsx --env-file-if-exists=.env --env-file-if-exists=.dev.vars src/sync/index.ts --backfill --store d1",
     "sync:backfill:bg": "./scripts/backfill.sh",
-    "api": "tsx src/api/server.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "passphrase": "tsx scripts/passphrase.ts",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run"
   },
@@ -19,20 +23,20 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260916.1",
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/express": "^5.0.6",
     "@types/node": "^22.20.2",
     "eslint": "^10.10.0",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "wrangler": "^4.133.0"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1"
+    "dotenv": "^17.4.2"
   },
   "allowScripts": {
     "better-sqlite3@13.0.3": true,

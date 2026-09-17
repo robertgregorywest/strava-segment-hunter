@@ -1,4 +1,4 @@
-import type { DB } from '../db/index.js';
+import type { SqlBackend, SqlStatement } from '../db/backend.js';
 import type { ForecastCacheRow, HistoricalWindCacheRow } from '../db/types.js';
 import type { HourlyWind } from './types.js';
 
@@ -50,7 +50,7 @@ function cacheKey(lat: number, lng: number, date: string): string {
 /** Wraps Open-Meteo's forecast and archive APIs with caching and horizon/unreachability handling. */
 export class OpenMeteoClient {
   constructor(
-    private readonly db: DB,
+    private readonly db: SqlBackend,
     private readonly forecastCacheMinutes: number,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
@@ -70,7 +70,7 @@ export class OpenMeteoClient {
     }
 
     const key = cacheKey(lat, lng, dateISO);
-    const cached = this.readForecastCache(key);
+    const cached = await this.readForecastCache(key);
     if (cached) return cached;
 
     const url = new URL(FORECAST_URL);
@@ -93,7 +93,7 @@ export class OpenMeteoClient {
     isoTimestamp: string,
   ): Promise<{ windSpeedMs: number; windDirectionDeg: number } | undefined> {
     const date = isoTimestamp.slice(0, 10);
-    let hours = this.readHistoricalCache(lat, lng, date);
+    let hours = await this.readHistoricalCache(lat, lng, date);
 
     if (hours.length === 0) {
       try {
@@ -106,7 +106,7 @@ export class OpenMeteoClient {
         url.searchParams.set('wind_speed_unit', 'ms');
         url.searchParams.set('timezone', 'UTC');
         hours = parseHourly(await this.fetchJson(url));
-        this.writeHistoricalCache(lat, lng, hours);
+        await this.writeHistoricalCache(lat, lng, hours);
       } catch {
         return undefined;
       }
@@ -128,10 +128,8 @@ export class OpenMeteoClient {
     return (await response.json()) as OpenMeteoHourlyResponse;
   }
 
-  private readForecastCache(key: string): HourlyWind[] | undefined {
-    const row = this.db.prepare('SELECT * FROM forecast_cache WHERE cache_key = ?').get(key) as
-      | ForecastCacheRow
-      | undefined;
+  private async readForecastCache(key: string): Promise<HourlyWind[] | undefined> {
+    const row = await this.db.get<ForecastCacheRow>('SELECT * FROM forecast_cache WHERE cache_key = ?', [key]);
     if (!row) return undefined;
 
     const ageMs = Date.now() - parseSqliteTimestamp(row.fetched_at).getTime();
@@ -140,22 +138,22 @@ export class OpenMeteoClient {
     return JSON.parse(row.payload) as HourlyWind[];
   }
 
-  private cachePayload(key: string, lat: number, lng: number, date: string, hours: HourlyWind[]): HourlyWind[] {
-    this.db
-      .prepare(
-        `INSERT INTO forecast_cache (cache_key, lat, lng, period_start, period_end, payload, fetched_at)
-         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(cache_key) DO UPDATE SET payload = excluded.payload, fetched_at = excluded.fetched_at`,
-      )
-      .run(key, lat, lng, date, date, JSON.stringify(hours));
+  private async cachePayload(key: string, lat: number, lng: number, date: string, hours: HourlyWind[]): Promise<HourlyWind[]> {
+    await this.db.run(
+      `INSERT INTO forecast_cache (cache_key, lat, lng, period_start, period_end, payload, fetched_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(cache_key) DO UPDATE SET payload = excluded.payload, fetched_at = excluded.fetched_at`,
+      [key, lat, lng, date, date, JSON.stringify(hours)],
+    );
     return hours;
   }
 
-  private readHistoricalCache(lat: number, lng: number, date: string): HourlyWind[] {
+  private async readHistoricalCache(lat: number, lng: number, date: string): Promise<HourlyWind[]> {
     const prefix = `${lat.toFixed(3)},${lng.toFixed(3)}|${date}`;
-    const rows = this.db
-      .prepare(`SELECT * FROM historical_wind_cache WHERE cache_key LIKE ? ORDER BY timestamp ASC`)
-      .all(`${prefix}%`) as HistoricalWindCacheRow[];
+    const rows = await this.db.all<HistoricalWindCacheRow>(
+      `SELECT * FROM historical_wind_cache WHERE cache_key LIKE ? ORDER BY timestamp ASC`,
+      [`${prefix}%`],
+    );
 
     return rows
       .filter((r) => r.wind_speed_ms !== null && r.wind_direction_deg !== null)
@@ -167,20 +165,18 @@ export class OpenMeteoClient {
       }));
   }
 
-  private writeHistoricalCache(lat: number, lng: number, hours: HourlyWind[]): void {
-    const insert = this.db.prepare(
-      `INSERT INTO historical_wind_cache (cache_key, lat, lng, timestamp, wind_speed_ms, wind_direction_deg, fetched_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(cache_key) DO NOTHING`,
-    );
-    const insertMany = this.db.transaction((items: HourlyWind[]) => {
-      for (const hour of items) {
-        const date = hour.time.slice(0, 10);
-        const key = `${lat.toFixed(3)},${lng.toFixed(3)}|${date}|${hour.time}`;
-        insert.run(key, lat, lng, hour.time, hour.windSpeedMs, hour.windDirectionDeg);
-      }
+  private async writeHistoricalCache(lat: number, lng: number, hours: HourlyWind[]): Promise<void> {
+    const statements: SqlStatement[] = hours.map((hour) => {
+      const date = hour.time.slice(0, 10);
+      const key = `${lat.toFixed(3)},${lng.toFixed(3)}|${date}|${hour.time}`;
+      return {
+        sql: `INSERT INTO historical_wind_cache (cache_key, lat, lng, timestamp, wind_speed_ms, wind_direction_deg, fetched_at)
+              VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+              ON CONFLICT(cache_key) DO NOTHING`,
+        params: [key, lat, lng, hour.time, hour.windSpeedMs, hour.windDirectionDeg],
+      };
     });
-    insertMany(hours);
+    await this.db.batch(statements);
   }
 }
 

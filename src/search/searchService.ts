@@ -1,4 +1,3 @@
-import type { Config } from '../config/index.js';
 import type { NearbySegment, Repository } from '../db/repository.js';
 import type { SegmentRow } from '../db/types.js';
 import { komStatus, type KomStatus } from '../segment/komStatus.js';
@@ -6,6 +5,7 @@ import { ForecastHorizonExceededError, WeatherUnavailableError, type OpenMeteoCl
 import { calibratePower, gapToKomSeconds, projectTime, type ProjectionConfidence, type RiderParams } from '../wind/projection.js';
 import type { HourlyWind } from '../wind/types.js';
 import { resolvePrEffort } from './calibration.js';
+import type { SearchConfig } from './types.js';
 
 export type SearchOrderBy = 'projectedMargin' | 'distance' | 'length' | 'gradient';
 
@@ -111,7 +111,7 @@ export class SearchService {
   constructor(
     private readonly repo: Repository,
     private readonly weather: OpenMeteoClient,
-    private readonly config: Config,
+    private readonly config: SearchConfig,
   ) {}
 
   async search(filters: SearchFilters): Promise<SearchResult> {
@@ -125,7 +125,7 @@ export class SearchService {
       throw new ForecastHorizonExceededError(latestSelectable);
     }
 
-    const nearby = this.repo.segmentsWithinRadius(lat, lng, filters.radiusM);
+    const nearby = await this.repo.segmentsWithinRadius(lat, lng, filters.radiusM);
     if (nearby.length === 0) {
       return {
         items: [],
@@ -215,7 +215,7 @@ export class SearchService {
   ): Promise<SearchWindAnnotation | undefined> {
     if (hourly.length === 0) return undefined;
 
-    const pr = resolvePrEffort(this.repo, segment);
+    const pr = await resolvePrEffort(this.repo, segment);
     if (!pr) return undefined;
 
     let historicalWind: { windSpeedMs: number; windDirectionDeg: number } | undefined;

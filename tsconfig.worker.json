@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Not `node`: the Worker runs on workerd, where `process`/`fs` don't
+    // exist and `D1Database`/`Fetcher` do. Checking it against Node's types
+    // would accept code that cannot run in production.
+    "types": ["@cloudflare/workers-types"],
+    "noEmit": true
+  },
+  "include": [
+    "src/worker",
+    "src/db/backend.ts",
+    "src/db/repository.ts",
+    "src/db/syncState.ts",
+    "src/db/types.ts",
+    "src/search",
+    "src/wind",
+    "src/segment",
+    "src/geometry"
+  ]
+}

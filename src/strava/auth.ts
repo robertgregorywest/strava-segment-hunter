@@ -1,5 +1,4 @@
-import type { Config } from '../config/index.js';
-import { TokenStore, type StoredTokens } from './tokenStore.js';
+import { FileTokenStore, type StoredTokens, type TokenStore } from './tokenStore.js';
 
 export const REQUIRED_SCOPES = ['read', 'read_all', 'activity:read_all'] as const;
 
@@ -49,24 +48,34 @@ export function describeCapabilityLoss(scope: string): string {
   }
 }
 
+export interface StravaCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+/**
+ * Refreshes and hands out Strava access tokens. The token store is injected
+ * — a `FileTokenStore` for local dev (see `authorize.ts`), a `D1TokenStore`
+ * wherever there's no local filesystem to trust across runs (GitHub Actions,
+ * the Worker).
+ */
 export class AuthManager {
-  private readonly store: TokenStore;
+  constructor(
+    private readonly credentials: StravaCredentials,
+    private readonly store: TokenStore,
+  ) {}
 
-  constructor(private readonly config: Config) {
-    this.store = new TokenStore(config.strava.tokenPath);
-  }
-
-  currentTokens(): StoredTokens | undefined {
+  async currentTokens(): Promise<StoredTokens | undefined> {
     return this.store.read();
   }
 
-  saveTokens(tokens: StoredTokens): void {
-    this.store.write(tokens);
+  async saveTokens(tokens: StoredTokens): Promise<void> {
+    await this.store.write(tokens);
   }
 
   /** Returns a valid access token, refreshing it first if it's near expiry. */
   async getValidAccessToken(): Promise<string> {
-    const tokens = this.store.read();
+    const tokens = await this.store.read();
     if (!tokens) throw new NotAuthorizedError();
 
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -84,8 +93,8 @@ export class AuthManager {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          client_id: this.config.strava.clientId,
-          client_secret: this.config.strava.clientSecret,
+          client_id: this.credentials.clientId,
+          client_secret: this.credentials.clientSecret,
           grant_type: 'refresh_token',
           refresh_token: tokens.refreshToken,
         }),
@@ -109,7 +118,9 @@ export class AuthManager {
       expiresAt: body.expires_at,
       scope: tokens.scope,
     };
-    this.store.write(updated);
+    await this.store.write(updated);
     return updated.accessToken;
   }
 }
+
+export { FileTokenStore };

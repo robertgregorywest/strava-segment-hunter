@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "strava-segment-hunter",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-17",
+
+  // A workers.dev subdomain, gated by a passphrase (src/worker/passphrase.ts)
+  // since this is a single-athlete tool with nothing else in front of it —
+  // same reasoning as cycling-reader's ADR-0003, ported rather than reused
+  // because a workers.dev hostname can't sit behind Cloudflare Access.
+  "workers_dev": true,
+  // No extra public URLs beyond the one above — the passphrase gate applies
+  // to it, but there's no reason to grow the surface a per-version preview
+  // URL would add.
+  "preview_urls": false,
+
+  "observability": { "enabled": true },
+
+  // Static UI (Leaflet + vanilla JS) served alongside the Worker's API
+  // routes. `run_worker_first: true` for every path, not just /api/*, so the
+  // passphrase check runs before a static file is ever served.
+  "assets": {
+    "directory": "./web",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+
+  // The corpus the sync workflow (GitHub Actions) writes and the Worker only
+  // reads at request time. The id is an identifier, not a credential, so it
+  // is committed here — same reasoning as cycling-reader's wrangler.jsonc.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "strava-segment-hunter",
+      "database_id": "ab3ec6b8-6a63-402e-8d7e-0b900a7dc15e"
+    }
+  ]
+}
