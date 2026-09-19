@@ -30,7 +30,7 @@ None — this is a greenfield project with no existing specs.
 ## Impact
 
 - **External APIs**: Strava v3 (authenticated, rate-limited, quota-bearing); Open-Meteo forecast and archive (free, keyless, fair-use).
-- **Data**: A local persistent store is required — the corpus outlives any single session and the backfill spans multiple days. Needs spatial querying over segment start points.
-- **Secrets**: Strava client ID/secret and refresh token must stay out of version control.
+- **Data**: A persistent store is required — the corpus outlives any single session and the backfill spans multiple days. Needs spatial querying over segment start points. Local development uses SQLite; production runs on Cloudflare D1, synced by a scheduled GitHub Actions job and served by a Cloudflare Worker, so the corpus and the search API don't depend on any single local machine being on (see `design.md`'s hosting migration decision).
+- **Secrets**: Strava client ID/secret and refresh token must stay out of version control. In production these live as Cloudflare/GitHub Actions secrets rather than local files; the Worker itself is gated by a shared passphrase since it is reachable on the public internet.
 - **Scope boundaries**: Single-athlete personal tool. KOM *defence* alerting is explicitly out of scope. Target dates are capped at the wind-forecast horizon; no climatology fallback in this change.
 - **Strava API terms**: Cached athlete data is the authenticated athlete's own. No third-party athlete data is stored beyond the public KOM time already surfaced by `xoms`.

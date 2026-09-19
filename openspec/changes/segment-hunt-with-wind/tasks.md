@@ -8,7 +8,7 @@
 ## 2. Persistence
 
 - [x] 2.1 Create the SQLite schema: activities, segments, segment_efforts, and sync progress
-- [x] 2.2 Add an R*Tree index over segment start coordinates for radius queries
+- [x] 2.2 Add an index over segment start coordinates supporting a bounding-box prefilter for radius queries, followed by an exact haversine-distance filter over the candidates (originally SQLite R*Tree; replaced with a plain B-tree index when the corpus moved to Cloudflare D1, which has no R*Tree module — see task 13 and `design.md`)
 - [x] 2.3 Record per-field freshness on segments so geometry is never refetched and KOM times expire
 - [x] 2.4 Add a migration mechanism so the schema can evolve without discarding a multi-day backfill
 
@@ -101,3 +101,17 @@
 - [ ] 12.2 Confirm an interrupted and resumed backfill neither repeats nor omits activities — requires interrupting a live `npm run sync:backfill` and resuming it; not executable in this environment (see final summary)
 - [ ] 12.3 Confirm sustained crawling never exceeds the 15-minute or daily read limits — requires observing real `X-ReadRateLimit-*` headers over a sustained live backfill; not executable in this environment (see final summary)
 - [ ] 12.4 Re-check whether `/segments/explore` remains unavailable, and record the finding — requires a live authenticated call to the Strava API; not executable in this environment (see final summary)
+
+## 13. Hosting Migration — Cloudflare D1 + GitHub Actions
+
+- [x] 13.1 Introduce a `SqlBackend` interface (`run`/`all`/`get`/`batch`) so sync, search and the API layer no longer call better-sqlite3 directly
+- [x] 13.2 Implement `SqliteBackend` (local dev/test), `D1HttpBackend` (Node-side sync via D1's HTTP API) and `D1WorkerBackend` (Cloudflare Worker via D1's native binding) against that interface
+- [x] 13.3 Convert every corpus read/write path (repository, sync state, rider settings, token store) to async, and add a D1-backed `oauth_tokens` table so tokens no longer need a local file in production
+- [x] 13.4 Replace the R*Tree radius query with a bounding-box prefilter plus exact distance filter, since D1 does not support the R*Tree module
+- [x] 13.5 Port the Express API/UI server to a Cloudflare Worker (`src/worker`), serving the existing static frontend as Worker assets
+- [x] 13.6 Gate every Worker request (API and static assets) behind a shared passphrase over HTTP Basic Auth, since the Worker is reachable on the public internet
+- [x] 13.7 Add a GitHub Actions workflow deploying the Worker on push to `main` after typecheck and tests pass
+- [x] 13.8 Add a GitHub Actions workflow running sync on a daily schedule against D1, with a heartbeat commit so GitHub does not auto-disable the schedule after 60 days
+- [x] 13.9 Migrate the existing local SQLite corpus to D1 in a one-time run, verified by an exact per-table row-count match
+- [x] 13.10 Verify the new pipeline end-to-end against production (a real scheduled GitHub Actions run writing to D1) before retiring the local cron
+- [x] 13.11 Retire the local cron job, backfill script and local data files once the D1/GitHub Actions pipeline was confirmed working

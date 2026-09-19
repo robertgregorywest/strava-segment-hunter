@@ -61,13 +61,21 @@ Effort payloads carry `start_latlng` but no geometry, which is precisely the spl
 
 *Alternatives considered:* enriching every segment encountered (multiplies phase 2 by an unknown factor for segments ridden once on holiday — rejected); enriching lazily at search time (a search would block on dozens of API calls — rejected).
 
-### SQLite with the R*Tree module
+### SQLite locally, Cloudflare D1 in production, behind one `SqlBackend` interface
 
-One file, no server, and it survives a multi-day interrupted backfill without operational overhead. R*Tree indexes segment start points for the radius query.
+Sync (GitHub Actions) and the search API/UI (a Cloudflare Worker) both write and read the same corpus through `src/db/backend.ts`'s `SqlBackend` interface (`run`/`all`/`get`/`batch`), with three implementations: `SqliteBackend` (better-sqlite3, local dev/test), `D1HttpBackend` (D1's HTTP API, used by the Node-side sync script and GitHub Actions), and `D1WorkerBackend` (D1's native binding, used inside the Worker). All three run identical SQL, so dev/test never drifts from what production executes.
 
-*Rationale:* the working set is one athlete's history — thousands of segments, tens of thousands of efforts. PostGIS's spatial richness buys nothing at this scale against the cost of running a server for a personal tool.
+D1 does not support the R\*Tree virtual table module, so the radius query (`Repository.segmentsWithinRadius`) uses a plain `(start_lat, start_lng)` B-tree index as a bounding-box prefilter, then an exact haversine distance filter over the candidates — the same two-step shape R\*Tree would have produced, just without a true 2D spatial index accelerating the prefilter. At this corpus size (~14k segments) the difference is immaterial; it would only matter if the corpus grew by orders of magnitude.
 
-*Alternatives considered:* PostGIS (over-provisioned); DuckDB (analytics-oriented; the workload here is transactional crawl-and-update).
+*Rationale:* a single file with no server was right for a personal tool, but running it only on one machine meant sync depended on that machine being on, awake, and past macOS's Full Disk Access/cron quirks. D1 lets sync run on a schedule in GitHub Actions and the API run in a Worker, with neither depending on local infrastructure, while keeping the "no server to operate" property — D1 is not something we provision or patch. Local dev keeps plain SQLite so day-to-day iteration and tests don't touch production data or need network access.
+
+*Alternatives considered:* PostGIS (over-provisioned; also a server to operate); DuckDB (analytics-oriented; the workload here is transactional crawl-and-update); keeping SQLite-on-one-machine and just fixing the cron scheduling (rejected — still a single point of failure and still requires the machine to be reachable for both sync and the web UI).
+
+### The Worker is public and gated by a shared passphrase
+
+Moving the API/UI off a machine on the local network onto a `workers.dev` URL means it is reachable from the public internet. Since this stores one athlete's own Strava data, every request — API and static assets alike — is checked against `PASSPHRASE_HASH` (PBKDF2-HMAC-SHA-256, `src/worker/passphrase.ts`) over HTTP Basic Auth before it's served. The passphrase itself is never persisted anywhere or typed where it could reach shell history or an assistant's context; only its hash is set as a Worker secret.
+
+*Alternatives considered:* Cloudflare Access (adds an external IdP dependency for a single-user tool — deferred, not rejected); deploying with no auth (rejected outright — would expose ride history and home-area segments publicly).
 
 ### Bearing as a length-weighted circular mean
 
@@ -117,6 +125,8 @@ Reported wind is at 10 m; a rider sits at roughly 1.5 m among hedgerows and buil
 - **KOM times drift** → Stored with a freshness window and surfaced as stale rather than silently trusted.
 - **`xoms` is undocumented and could be withdrawn** → Gap-to-KOM degrades to absent rather than wrong; `kom_rank` from effort data remains as an independent signal.
 - **Strava API terms constrain data retention** → Only the authenticated athlete's own data is stored; the sole third-party datum is the public KOM time already exposed by `xoms`.
+- **D1's free tier caps writes at 100,000 rows/day** → Day-to-day incremental sync stays well under this, but a full re-backfill of the corpus (~190,000 `segment_efforts` rows alone) would need to be spread across more than one day, or run against a paid plan.
+- **Two independent sync paths (local file-based tokens, D1-based tokens) briefly ran concurrently against the same Strava app during the hosting migration** → risked one side breaking the other if Strava rotated the refresh token mid-migration. No rotation occurred; the local cron was retired promptly once the D1 path was verified, rather than leaving both running indefinitely.
 
 ## Migration Plan
 
@@ -126,8 +136,9 @@ Greenfield — no migration. Delivery is sequenced so each phase is independentl
 2. **Geometry** — enrichment plus bearing and directionality. Verifiable against the worked example: 319.3°, 0.968, path length within 1% of 3538 m.
 3. **Wind** — Open-Meteo, calibration, projection. Verifiable by reproducing the 290 s / 353 s spread.
 4. **Search UI** — map, filters, date picker.
+5. **Hosting migration** (post-launch) — moved sync from a local macOS cron job to GitHub Actions and the corpus from local SQLite to Cloudflare D1, once the local-only version had already proven the model end-to-end. The one-time data migration copied all rows from the local SQLite file to D1 and was verified by an exact per-table row-count match; the local cron was only retired once a real scheduled GitHub Actions run had written to production D1 successfully.
 
-Rollback is discarding the SQLite file and re-running sync; nothing is written back to Strava.
+Rollback is discarding the SQLite file (local dev) or the D1 database (production) and re-running sync from Strava; nothing is written back to Strava.
 
 ## Open Questions
 
