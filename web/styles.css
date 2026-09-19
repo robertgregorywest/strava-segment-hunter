@@ -144,6 +144,11 @@ button[type="submit"] {
   background: var(--bg);
 }
 .result-card:hover { border-color: var(--accent); }
+.result-card--selected {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.selected-route { stroke: var(--accent); }
 
 .result-card h3 { margin: 0 0 4px; font-size: 1rem; }
 

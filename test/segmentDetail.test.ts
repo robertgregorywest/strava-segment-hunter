@@ -118,6 +118,46 @@ describe('SegmentDetailService', () => {
     expect(detail?.confidence).toBe('calibrated');
   });
 
+  it('returns the decoded polyline as the route', async () => {
+    await seed({ polyline: '_p~iF~ps|U_ulLnnqC_mqNvxq`@' });
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(3, 139.3) as unknown as typeof fetch);
+    const service = new SegmentDetailService(repo, weather, testConfig());
+
+    const detail = await service.getDetail(1, undefined, 1);
+    expect(detail?.segment.route).toEqual({
+      points: [
+        [38.5, -120.2],
+        [40.7, -120.95],
+        [43.252, -126.453],
+      ],
+      approximate: false,
+    });
+  });
+
+  it('falls back to an approximate start-to-end route when no polyline is stored', async () => {
+    await seed({ endLat: 51.52, endLng: -0.13 });
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(3, 139.3) as unknown as typeof fetch);
+    const service = new SegmentDetailService(repo, weather, testConfig());
+
+    const detail = await service.getDetail(1, undefined, 1);
+    expect(detail?.segment.route).toEqual({
+      points: [
+        [51.5, -0.1],
+        [51.52, -0.13],
+      ],
+      approximate: true,
+    });
+  });
+
+  it('returns an empty route when neither a polyline nor an end point is stored', async () => {
+    await seed({ prSeconds: null, prActivityId: null, prStartDate: null, effortCount: null });
+    const weather = new OpenMeteoClient(backend, 60);
+    const service = new SegmentDetailService(repo, weather, testConfig());
+
+    const detail = await service.getDetail(1, undefined, 1);
+    expect(detail?.segment.route).toEqual({ points: [], approximate: true });
+  });
+
   it('reports a message instead of projections when there is no baseline effort', async () => {
     await seed({ prSeconds: null, prActivityId: null, prStartDate: null, effortCount: null });
     const weather = new OpenMeteoClient(backend, 60);

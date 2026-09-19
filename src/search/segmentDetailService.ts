@@ -1,4 +1,6 @@
 import type { Repository } from '../db/repository.js';
+import type { SegmentRow } from '../db/types.js';
+import { decodePolyline, type LatLng } from '../geometry/polyline.js';
 import { komStatus, type KomStatus } from '../segment/komStatus.js';
 import { WeatherUnavailableError, type OpenMeteoClient } from '../wind/openMeteoClient.js';
 import { calibratePower, gapToKomSeconds, projectTime, type ProjectionConfidence, type RiderParams } from '../wind/projection.js';
@@ -16,6 +18,13 @@ export interface SegmentSummary {
   windNeutral: boolean;
   startLat: number | null;
   startLng: number | null;
+  route: SegmentRoute;
+}
+
+/** A segment's path for drawing, start to finish. Approximate when only start/end points are known. */
+export interface SegmentRoute {
+  points: LatLng[];
+  approximate: boolean;
 }
 
 export interface PersonalHistory {
@@ -47,6 +56,25 @@ export interface SegmentDetailResult {
   fastestHours: HourlyProjection[];
   weatherUnavailable?: boolean;
   message?: string;
+}
+
+function segmentRoute(segment: SegmentRow): SegmentRoute {
+  if (segment.polyline) return { points: decodePolyline(segment.polyline), approximate: false };
+  if (
+    segment.start_lat !== null &&
+    segment.start_lng !== null &&
+    segment.end_lat !== null &&
+    segment.end_lng !== null
+  ) {
+    return {
+      points: [
+        [segment.start_lat, segment.start_lng],
+        [segment.end_lat, segment.end_lng],
+      ],
+      approximate: true,
+    };
+  }
+  return { points: [], approximate: true };
 }
 
 function isoDatePlusDays(base: Date, days: number): string {
@@ -86,6 +114,7 @@ export class SegmentDetailService {
       windNeutral: segment.wind_neutral === 1,
       startLat: segment.start_lat,
       startLng: segment.start_lng,
+      route: segmentRoute(segment),
     };
 
     const personalHistory: PersonalHistory = {

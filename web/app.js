@@ -7,6 +7,7 @@ const state = {
 
 const map = L.map('map');
 const markersLayer = L.layerGroup().addTo(map);
+const selectedRouteLayer = L.layerGroup().addTo(map);
 let tilesAdded = false;
 
 function ensureTiles() {
@@ -16,6 +17,46 @@ function ensureTiles() {
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
   tilesAdded = true;
+}
+
+function markSelectedCard() {
+  for (const card of document.querySelectorAll('.result-card')) {
+    card.classList.toggle('result-card--selected', card.dataset.id === String(state.openSegmentId));
+  }
+}
+
+/**
+ * Width (px) of the map hidden behind the open detail panel. Zero when the
+ * panel is closed, or when it covers nearly the whole map (narrow screens),
+ * where offsetting would leave nowhere to show the segment.
+ */
+function detailPanelOverlap() {
+  const panel = document.getElementById('detailPanel');
+  if (panel.hidden) return 0;
+  const mapRect = document.getElementById('map').getBoundingClientRect();
+  const overlap = Math.max(0, mapRect.right - panel.getBoundingClientRect().left);
+  return overlap > mapRect.width - 150 ? 0 : overlap;
+}
+
+function centerOnSelection(lat, lng) {
+  map.setView([lat, lng], map.getZoom(), { animate: false });
+  const overlap = detailPanelOverlap();
+  if (overlap > 0) map.panBy([overlap / 2, 0], { animate: false });
+}
+
+function drawSelectedRoute(route) {
+  selectedRouteLayer.clearLayers();
+  if (!route || route.points.length === 0) return;
+  const line = L.polyline(route.points, {
+    className: 'selected-route',
+    weight: 5,
+    dashArray: route.approximate ? '8 8' : null,
+  }).addTo(selectedRouteLayer);
+  map.fitBounds(line.getBounds(), {
+    paddingTopLeft: [40, 40],
+    paddingBottomRight: [40 + detailPanelOverlap(), 40],
+    maxZoom: 16,
+  });
 }
 
 function formatDuration(seconds) {
@@ -117,6 +158,7 @@ function renderResults(items) {
   const list = document.getElementById('results');
   list.innerHTML = '';
   markersLayer.clearLayers();
+  selectedRouteLayer.clearLayers();
 
   for (const item of items) {
     const li = document.createElement('li');
@@ -145,7 +187,10 @@ function renderResults(items) {
       </div>
       <div class="badges">${badgesFor(item).map((b) => `<span class="badge">${b}</span>`).join('')}</div>
     `;
-    li.addEventListener('click', () => openDetail(item.segmentId));
+    li.addEventListener('click', () => {
+      openDetail(item.segmentId);
+      if (item.startLat !== null && item.startLng !== null) centerOnSelection(item.startLat, item.startLng);
+    });
     list.appendChild(li);
 
     if (item.startLat !== null && item.startLng !== null) {
@@ -160,6 +205,7 @@ function renderResults(items) {
       }
     }
   }
+  markSelectedCard();
 }
 
 async function runSearch() {
@@ -258,13 +304,18 @@ function renderDetail(detail) {
 
 async function openDetail(segmentId) {
   state.openSegmentId = segmentId;
+  selectedRouteLayer.clearLayers();
+  markSelectedCard();
   const panel = document.getElementById('detailPanel');
   panel.hidden = false;
   document.getElementById('detailContent').innerHTML = '<p class="hint">Loading…</p>';
   try {
     const detail = await fetchJson(`/api/segments/${segmentId}`);
+    if (state.openSegmentId !== segmentId) return;
     renderDetail(detail);
+    drawSelectedRoute(detail.segment.route);
   } catch (err) {
+    if (state.openSegmentId !== segmentId) return;
     document.getElementById('detailContent').innerHTML = `<p class="hint">${err.message}</p>`;
   }
 }
@@ -277,6 +328,8 @@ document.getElementById('searchForm').addEventListener('submit', (e) => {
 document.getElementById('detailClose').addEventListener('click', () => {
   document.getElementById('detailPanel').hidden = true;
   state.openSegmentId = null;
+  selectedRouteLayer.clearLayers();
+  markSelectedCard();
 });
 
 document.getElementById('settingsToggle').addEventListener('click', () => {
