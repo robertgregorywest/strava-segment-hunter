@@ -1,0 +1,11 @@
+{
+  "browser": {
+    "contextOptions": {
+      "httpCredentials": {
+        "username": "claude",
+        "password": "claude-verify",
+        "origin": "http://localhost:8799"
+      }
+    }
+  }
+}
