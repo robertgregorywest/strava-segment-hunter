@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type DB } from '../src/db/index.js';
 import { SqliteBackend } from '../src/db/sqliteBackend.js';
@@ -66,5 +68,32 @@ describe('database', () => {
     expect(await state.get('cursor')).toBe('42');
     await state.setBoolean('backfill_complete', true);
     expect(await state.getBoolean('backfill_complete')).toBe(true);
+  });
+
+  it('carries per-hour historical wind rows over to one row per location-day', () => {
+    const legacy = new Database(join(dir, 'legacy.db'));
+    legacy.exec(readFileSync('migrations/0001_init.sql', 'utf8'));
+    const insert = legacy.prepare(
+      `INSERT INTO historical_wind_cache (cache_key, lat, lng, timestamp, wind_speed_ms, wind_direction_deg, fetched_at)
+       VALUES (?, 51.50012, -0.10034, ?, ?, ?, '2026-09-01 00:00:00')`,
+    );
+    insert.run('51.500,-0.100|2024-06-01|2024-06-01T09:00Z', '2024-06-01T09:00Z', 3, 300);
+    insert.run('51.500,-0.100|2024-06-01|2024-06-01T08:00Z', '2024-06-01T08:00Z', 5, 200);
+    insert.run('51.500,-0.100|2024-06-02|2024-06-02T08:00Z', '2024-06-02T08:00Z', 1, 10);
+
+    legacy.exec(readFileSync('migrations/0002_historical_wind_per_day.sql', 'utf8'));
+
+    const rows = legacy
+      .prepare('SELECT cache_key, date, payload FROM historical_wind_cache ORDER BY cache_key')
+      .all() as { cache_key: string; date: string; payload: string }[];
+    expect(rows.map((r) => [r.cache_key, r.date])).toEqual([
+      ['51.500,-0.100|2024-06-01', '2024-06-01'],
+      ['51.500,-0.100|2024-06-02', '2024-06-02'],
+    ]);
+    expect(JSON.parse(rows[0]!.payload)).toEqual([
+      { time: '2024-06-01T08:00Z', windSpeedMs: 5, windDirectionDeg: 200, windGustsMs: null },
+      { time: '2024-06-01T09:00Z', windSpeedMs: 3, windDirectionDeg: 300, windGustsMs: null },
+    ]);
+    legacy.close();
   });
 });

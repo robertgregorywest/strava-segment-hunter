@@ -6,6 +6,13 @@ export interface NearbySegment extends SegmentRow {
   distanceFromSearchM: number;
 }
 
+export interface PrWindCandidate {
+  id: number;
+  start_lat: number;
+  start_lng: number;
+  pr_start_date: string;
+}
+
 export interface SegmentStub {
   id: number;
   name: string;
@@ -191,6 +198,30 @@ export class Repository {
          AND kom_fetched_at IS NOT NULL
          AND julianday('now') - julianday(kom_fetched_at) > ?`,
       [freshnessDays],
+    );
+  }
+
+  /**
+   * Projectable segments whose PR has no stored wind yet, or whose stored
+   * wind was looked up for an earlier PR (see migrations/0002).
+   */
+  async segmentsNeedingPrWind(): Promise<PrWindCandidate[]> {
+    return this.db.all<PrWindCandidate>(
+      `SELECT id, start_lat, start_lng, pr_start_date FROM segments
+       WHERE has_baseline = 1
+         AND wind_neutral = 0
+         AND start_lat IS NOT NULL
+         AND start_lng IS NOT NULL
+         AND pr_start_date IS NOT NULL
+         AND pr_wind_start_date IS NOT pr_start_date`,
+    );
+  }
+
+  async applyPrWind(id: number, prStartDate: string, windSpeedMs: number, windDirectionDeg: number): Promise<void> {
+    await this.db.run(
+      `UPDATE segments SET pr_wind_speed_ms = ?, pr_wind_direction_deg = ?, pr_wind_start_date = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+      [windSpeedMs, windDirectionDeg, prStartDate, id],
     );
   }
 

@@ -36,6 +36,11 @@ export interface SegmentRow {
   best_kom_rank: number | null;
   has_baseline: 0 | 1;
 
+  /** Wind at the PR, and the pr_start_date it was looked up for (stale once they differ). */
+  pr_wind_speed_ms: number | null;
+  pr_wind_direction_deg: number | null;
+  pr_wind_start_date: string | null;
+
   starred: 0 | 1;
   detail_fetched_at: string | null;
 
@@ -75,8 +80,8 @@ export interface HistoricalWindCacheRow {
   cache_key: string;
   lat: number;
   lng: number;
-  timestamp: string;
-  wind_speed_ms: number | null;
-  wind_direction_deg: number | null;
+  date: string;
+  /** JSON-encoded HourlyWind[] for the whole UTC day. */
+  payload: string;
   fetched_at: string;
 }

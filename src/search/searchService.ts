@@ -4,7 +4,7 @@ import { komStatus, type KomStatus } from '../segment/komStatus.js';
 import { ForecastHorizonExceededError, WeatherUnavailableError, type OpenMeteoClient } from '../wind/openMeteoClient.js';
 import { calibratePower, gapToKomSeconds, projectTime, type ProjectionConfidence, type RiderParams } from '../wind/projection.js';
 import type { HourlyWind } from '../wind/types.js';
-import { resolvePrEffort } from './calibration.js';
+import { resolvePrEffort, resolvePrWind } from './calibration.js';
 import type { SearchConfig } from './types.js';
 
 export type SearchOrderBy = 'projectedMargin' | 'distance' | 'length' | 'gradient';
@@ -218,14 +218,7 @@ export class SearchService {
     const pr = await resolvePrEffort(this.repo, segment);
     if (!pr) return undefined;
 
-    let historicalWind: { windSpeedMs: number; windDirectionDeg: number } | undefined;
-    if (pr.startDate) {
-      historicalWind = await this.weather.getHistoricalWindAt(
-        segment.start_lat as number,
-        segment.start_lng as number,
-        pr.startDate,
-      );
-    }
+    const historicalWind = await resolvePrWind(this.weather, segment, pr);
 
     const power = calibratePower(
       pr.elapsedS,

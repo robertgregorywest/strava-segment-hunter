@@ -12,6 +12,8 @@ import { D1TokenStore, FileTokenStore, type TokenStore } from '../strava/tokenSt
 import { enrichSegments } from './enrichment.js';
 import { listActivities, processUnprocessedActivities } from './backfill.js';
 import { incrementalSync } from './incremental.js';
+import { OpenMeteoClient } from '../wind/openMeteoClient.js';
+import { annotatePrWind } from './prWind.js';
 import { ingestStarredSegments } from './starred.js';
 
 /**
@@ -62,29 +64,39 @@ async function main(): Promise<void> {
       maxNetworkRetries: config.sync.maxNetworkRetries,
     });
 
-    log(backfillMode ? 'Starting full backfill…' : 'Starting incremental sync…');
+    try {
+      log(backfillMode ? 'Starting full backfill…' : 'Starting incremental sync…');
 
-    if (backfillMode) {
-      const listed = await listActivities(client, repo, state);
-      log(`Listed ${listed} new activities.`);
-      const processed = await processUnprocessedActivities(client, repo);
-      log(`Processed segment efforts for ${processed} activities.`);
-    } else {
-      const { listed, processed } = await incrementalSync(client, repo, state);
-      log(`Listed ${listed} new activities, processed ${processed}.`);
+      if (backfillMode) {
+        const listed = await listActivities(client, repo, state);
+        log(`Listed ${listed} new activities.`);
+        const processed = await processUnprocessedActivities(client, repo);
+        log(`Processed segment efforts for ${processed} activities.`);
+      } else {
+        const { listed, processed } = await incrementalSync(client, repo, state);
+        log(`Listed ${listed} new activities, processed ${processed}.`);
+      }
+
+      const starred = await ingestStarredSegments(client, repo);
+      log(`Ingested ${starred} starred segments.`);
+
+      const enriched = await enrichSegments(
+        client,
+        repo,
+        config.home,
+        config.segment.komFreshnessDays,
+        config.segment.windNeutralThreshold,
+      );
+      log(`Enriched ${enriched} segments.`);
+    } catch (err) {
+      // PR wind lookups below need no Strava calls, so a spent quota doesn't stop them.
+      if (!(err instanceof DailyQuotaExhaustedError)) throw err;
+      log(err.message);
     }
 
-    const starred = await ingestStarredSegments(client, repo);
-    log(`Ingested ${starred} starred segments.`);
-
-    const enriched = await enrichSegments(
-      client,
-      repo,
-      config.home,
-      config.segment.komFreshnessDays,
-      config.segment.windNeutralThreshold,
-    );
-    log(`Enriched ${enriched} segments.`);
+    const weather = new OpenMeteoClient(backend, config.weather.forecastCacheMinutes);
+    const prWinds = await annotatePrWind(weather, repo, config.home);
+    log(`Stored PR wind for ${prWinds} segments.`);
 
     const counts = await repo.activityCount();
     const elapsedS = (Date.now() - startedAt) / 1000;

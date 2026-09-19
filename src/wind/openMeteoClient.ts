@@ -1,4 +1,4 @@
-import type { SqlBackend, SqlStatement } from '../db/backend.js';
+import type { SqlBackend } from '../db/backend.js';
 import type { ForecastCacheRow, HistoricalWindCacheRow } from '../db/types.js';
 import type { HourlyWind } from './types.js';
 
@@ -98,24 +98,41 @@ export class OpenMeteoClient {
     lng: number,
     isoTimestamp: string,
   ): Promise<{ windSpeedMs: number; windDirectionDeg: number } | undefined> {
-    const date = isoTimestamp.slice(0, 10);
-    let hours = await this.readHistoricalCache(lat, lng, date);
+    try {
+      return await this.historicalWindAt(lat, lng, isoTimestamp);
+    } catch {
+      return undefined;
+    }
+  }
 
-    if (hours.length === 0) {
-      try {
-        const url = new URL(ARCHIVE_URL);
-        url.searchParams.set('latitude', String(lat));
-        url.searchParams.set('longitude', String(lng));
-        url.searchParams.set('start_date', date);
-        url.searchParams.set('end_date', date);
-        url.searchParams.set('hourly', 'wind_speed_10m,wind_direction_10m');
-        url.searchParams.set('wind_speed_unit', 'ms');
-        url.searchParams.set('timezone', 'UTC');
-        hours = parseHourly(await this.fetchJson(url));
-        await this.writeHistoricalCache(lat, lng, hours);
-      } catch {
-        return undefined;
-      }
+  /**
+   * As `getHistoricalWindAt`, but throws `WeatherUnavailableError` when the
+   * archive can't be reached, so a caller working through many lookups (sync's
+   * PR wind step) can tell "Open-Meteo is down or throttling us" apart from
+   * "the archive has no data for this day". The latter is still undefined.
+   */
+  async historicalWindAt(
+    lat: number,
+    lng: number,
+    isoTimestamp: string,
+  ): Promise<{ windSpeedMs: number; windDirectionDeg: number } | undefined> {
+    const date = isoTimestamp.slice(0, 10);
+    const key = cacheKey(lat, lng, date);
+    let hours = await this.readHistoricalCache(key);
+
+    if (!hours) {
+      const url = new URL(ARCHIVE_URL);
+      url.searchParams.set('latitude', String(lat));
+      url.searchParams.set('longitude', String(lng));
+      url.searchParams.set('start_date', date);
+      url.searchParams.set('end_date', date);
+      url.searchParams.set('hourly', 'wind_speed_10m,wind_direction_10m');
+      url.searchParams.set('wind_speed_unit', 'ms');
+      url.searchParams.set('timezone', 'UTC');
+      hours = parseHourly(await this.fetchJson(url));
+      // An empty day isn't cached: the archive lags real time by a few days,
+      // so a recent PR's wind can appear on a later lookup.
+      if (hours.length > 0) await this.writeHistoricalCache(key, lat, lng, date, hours);
     }
 
     return nearestHour(hours, isoTimestamp);
@@ -154,35 +171,19 @@ export class OpenMeteoClient {
     return hours;
   }
 
-  private async readHistoricalCache(lat: number, lng: number, date: string): Promise<HourlyWind[]> {
-    const prefix = `${lat.toFixed(3)},${lng.toFixed(3)}|${date}`;
-    const rows = await this.db.all<HistoricalWindCacheRow>(
-      `SELECT * FROM historical_wind_cache WHERE cache_key LIKE ? ORDER BY timestamp ASC`,
-      [`${prefix}%`],
-    );
-
-    return rows
-      .filter((r) => r.wind_speed_ms !== null && r.wind_direction_deg !== null)
-      .map((r) => ({
-        time: r.timestamp,
-        windSpeedMs: r.wind_speed_ms as number,
-        windDirectionDeg: r.wind_direction_deg as number,
-        windGustsMs: null,
-      }));
+  /** A single primary-key lookup — see migrations/0002 for why this isn't a per-hour prefix scan. */
+  private async readHistoricalCache(key: string): Promise<HourlyWind[] | undefined> {
+    const row = await this.db.get<HistoricalWindCacheRow>('SELECT * FROM historical_wind_cache WHERE cache_key = ?', [key]);
+    return row ? (JSON.parse(row.payload) as HourlyWind[]) : undefined;
   }
 
-  private async writeHistoricalCache(lat: number, lng: number, hours: HourlyWind[]): Promise<void> {
-    const statements: SqlStatement[] = hours.map((hour) => {
-      const date = hour.time.slice(0, 10);
-      const key = `${lat.toFixed(3)},${lng.toFixed(3)}|${date}|${hour.time}`;
-      return {
-        sql: `INSERT INTO historical_wind_cache (cache_key, lat, lng, timestamp, wind_speed_ms, wind_direction_deg, fetched_at)
-              VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-              ON CONFLICT(cache_key) DO NOTHING`,
-        params: [key, lat, lng, hour.time, hour.windSpeedMs, hour.windDirectionDeg],
-      };
-    });
-    await this.db.batch(statements);
+  private async writeHistoricalCache(key: string, lat: number, lng: number, date: string, hours: HourlyWind[]): Promise<void> {
+    await this.db.run(
+      `INSERT INTO historical_wind_cache (cache_key, lat, lng, date, payload, fetched_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(cache_key) DO NOTHING`,
+      [key, lat, lng, date, JSON.stringify(hours)],
+    );
   }
 }
 

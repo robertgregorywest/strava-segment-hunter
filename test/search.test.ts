@@ -153,6 +153,36 @@ describe('SearchService', () => {
     expect(result.items[0]?.gapToKomS).toBeDefined();
   });
 
+  it('calibrates from the PR wind stored by sync without querying the archive', async () => {
+    await seedSegment(repo, {
+      id: 1,
+      name: 'Near',
+      startLat: 51.501,
+      startLng: -0.101,
+      distanceM: 3538,
+      averageGrade: 0.9,
+      bearingDeg: 319.3,
+      directionality: 0.97,
+      windNeutral: false,
+      komSeconds: 306,
+      prSeconds: 320,
+      prStartDate: '2024-06-01T08:00:00Z',
+      bestKomRank: 5,
+      hasBaseline: true,
+    });
+    await repo.applyPrWind(1, '2024-06-01T08:00:00Z', 4, 140);
+
+    const fetchMock = windFetchMock(3, 139.3);
+    const weather = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
+    const service = new SearchService(repo, weather, testConfig());
+
+    const result = await service.search({ radiusM: 2000, targetDate: '2026-01-05' });
+
+    expect(result.items[0]?.wind?.confidence).toBe('calibrated');
+    const fetchedUrls = fetchMock.mock.calls.map((call) => String((call as unknown[])[0]));
+    expect(fetchedUrls.some((u) => u.includes('archive-api'))).toBe(false);
+  });
+
   it('includes a not-yet-enriched segment stub in results without attempting a projection', async () => {
     // Simulates search running mid-backfill: segment 1 has only ever been
     // upserted as a stub (phase 1), segment 2 has gone through full enrichment

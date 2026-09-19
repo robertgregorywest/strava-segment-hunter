@@ -118,4 +118,48 @@ describe('OpenMeteoClient', () => {
     const wind = await client.getHistoricalWindAt(51.5, -0.1, '2024-06-01T08:05:00Z');
     expect(wind).toBeUndefined();
   });
+
+  it('caches a historical day as one row, serving another hour of it without a further request', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            hourly: {
+              time: ['2024-06-01T07:00', '2024-06-01T08:00', '2024-06-01T09:00'],
+              wind_speed_10m: [2, 5, 3],
+              wind_direction_10m: [100, 200, 300],
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
+
+    await client.getHistoricalWindAt(51.5, -0.1, '2024-06-01T08:05:00Z');
+    const later = await client.getHistoricalWindAt(51.5, -0.1, '2024-06-01T09:10:00Z');
+
+    expect(later).toMatchObject({ windSpeedMs: 3, windDirectionDeg: 300 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const rows = await backend.all<{ cache_key: string }>('SELECT cache_key FROM historical_wind_cache');
+    expect(rows).toEqual([{ cache_key: '51.500,-0.100|2024-06-01' }]);
+  });
+
+  it('does not cache a day the archive has no data for yet', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ hourly: { time: [] } }), { status: 200 }));
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
+
+    expect(await client.getHistoricalWindAt(51.5, -0.1, '2026-09-18T08:00:00Z')).toBeUndefined();
+    await client.getHistoricalWindAt(51.5, -0.1, '2026-09-18T08:00:00Z');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws WeatherUnavailableError from historicalWindAt when the archive is unreachable', async () => {
+    const fetchMock = vi.fn(async () => new Response('slow down', { status: 429 }));
+    const client = new OpenMeteoClient(backend, 60, fetchMock as unknown as typeof fetch);
+
+    await expect(client.historicalWindAt(51.5, -0.1, '2024-06-01T08:05:00Z')).rejects.toBeInstanceOf(
+      WeatherUnavailableError,
+    );
+  });
 });
