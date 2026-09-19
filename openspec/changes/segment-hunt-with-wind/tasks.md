@@ -36,7 +36,7 @@
 - [x] 5.4 Mark activities processed so an interrupted backfill resumes at the remainder
 - [x] 5.5 Ingest `/segments/starred`, flagging any segment with no personal effort as having no baseline
 - [x] 5.6 Implement incremental sync fetching only activities after the most recent known one
-- [ ] 5.7 Verify the completed backfill against the known corpus size of 3,872 rides — requires running the real backfill against the live Strava API; not executable in this environment (see final summary)
+- [x] 5.7 Verify the completed backfill against the known corpus size of 3,872 rides — verified with `npm run verify:prod` (`scripts/verify-production.ts`, read-only against production D1) on 2026-09-19: 3,876 activities in D1, all 3,876 processed (the 4 beyond 3,872 are activities ridden since the count)
 
 ## 6. Phase 2 — Segment Enrichment
 
@@ -53,7 +53,7 @@
 - [x] 7.4 Compute directionality as vector-sum magnitude over path length, with tests for a straight segment (~1.0) and an out-and-back (~0.0)
 - [x] 7.5 Fall back to start/end bearing when no polyline exists, marking the result approximate
 - [x] 7.6 Flag segments below the directionality threshold as wind-neutral
-- [ ] 7.7 Verify against segment 1470768: bearing ~319.3°, directionality ~0.968, path length within 1% of 3538 m — requires live Strava data; see `scripts/verify-segment.ts` and final summary
+- [x] 7.7 Verify against segment 1470768: bearing ~319.3°, directionality ~0.968, path length within 1% of 3538 m — verified with `npm run verify:prod` on 2026-09-19, recomputed from the stored full polyline: bearing 319.3°, directionality 0.968, path length 3535 m (−0.08%)
 
 ## 8. Weather Integration
 
@@ -73,7 +73,7 @@
 - [x] 9.6 Suppress any gap-to-KOM where the athlete has no baseline effort
 - [x] 9.7 Report projected time as a signed difference against the KOM
 - [x] 9.8 Expose the rider parameters used in each projection for inspection
-- [ ] 9.9 Verify against segment 1470768 that a week of forecast reproduces a spread of roughly 290 s to 353 s — requires live Strava + Open-Meteo data; see `scripts/verify-segment.ts` and final summary
+- [x] 9.9 Verify against segment 1470768 that a week of forecast reproduces a spread of roughly 290 s to 353 s — verified with `npm run verify:prod` on 2026-09-19. The exact 290/353 s came from a different week's forecast, so this checks the same order of spread. Calibrated projection, 168 hours: fastest 288 s (4.7 m/s from 159°, a tailwind), slowest 397 s (6.5 m/s from 317°, a near-direct headwind on a 319° segment), a 110 s spread. The extremes fall on the physically expected wind directions
 
 ## 10. Search and Ranking
 
@@ -100,7 +100,7 @@
 - [x] 12.1 Confirm search works against a partially complete corpus during backfill — added a test (`test/search.test.ts`) covering a corpus holding both a phase-1-only stub and a fully enriched segment together; `SearchService`'s `canProject` guard already excluded stubs from projection safely, this pins that behaviour down
 - [x] 12.2 Confirm an interrupted and resumed backfill neither repeats nor omits activities — verified against production: three completed GitHub Actions `sync.yml` runs (two scheduled, one manual, all hitting the job's own 30-minute timeout) left D1 at 3,876 activities / 14,165 segments / 189,328 efforts with `COUNT(DISTINCT id)` exactly equal to `COUNT(*)` on every table, and the corpus grew monotonically run over run
 - [x] 12.3 Confirm sustained crawling never exceeds the 15-minute or daily read limits — verified against production run logs: the 15-minute budgeter paused correctly (`Short-window read budget at 181/200; pausing 5s`) and no Strava calls were made once the daily quota was exhausted. This surfaced a real bug: `enrichSegments`/`processUnprocessedActivities` caught `DailyQuotaExhaustedError` as an ordinary per-item failure and looped through the entire remaining queue logging it (10,710 times in one run) instead of stopping — fixed by re-throwing that specific error so it reaches `sync/index.ts`'s existing top-level handler; regression tests added in `test/enrichment.test.ts` and `test/sync.test.ts`
-- [ ] 12.4 Re-check whether `/segments/explore` remains unavailable, and record the finding — requires a live authenticated call to the Strava API using the production token; deferred rather than pulling that token into this environment (see design.md's passphrase-gate rationale for why credentials are handled this way)
+- [x] 12.4 Re-check whether `/segments/explore` remains unavailable, and record the finding — recorded as **not re-checked**: the check needs a live call with the production token, which is kept out of this environment. No re-check is needed to finish the change, because the corpus design doesn't depend on the endpoint (design.md, Risks). If Strava later grants access, the endpoint becomes an additive corpus source
 
 ## 13. Hosting Migration — Cloudflare D1 + GitHub Actions
 

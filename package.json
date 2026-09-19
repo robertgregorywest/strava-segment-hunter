@@ -13,6 +13,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "passphrase": "tsx scripts/passphrase.ts",
+    "verify:prod": "tsx --env-file-if-exists=.env --env-file-if-exists=.dev.vars scripts/verify-production.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "lint": "eslint .",
