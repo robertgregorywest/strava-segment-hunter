@@ -8,6 +8,7 @@ import { SyncState } from '../src/db/syncState.js';
 import { listActivities, processUnprocessedActivities } from '../src/sync/backfill.js';
 import { incrementalSync } from '../src/sync/incremental.js';
 import { ingestStarredSegments } from '../src/sync/starred.js';
+import { DailyQuotaExhaustedError } from '../src/strava/rateLimiter.js';
 import type { StravaReadClient } from '../src/strava/client.js';
 import type {
   StravaActivitySummary,
@@ -145,6 +146,28 @@ describe('sync', () => {
     const resumed = await processUnprocessedActivities(client, repo);
     expect(resumed).toBe(1);
     expect(client.activityCalls).toEqual([2]);
+  });
+
+  it('stops immediately on daily quota exhaustion instead of looping through the rest of the queue', async () => {
+    const client = new FakeStravaClient();
+    client.activitiesByPage.set(1, [
+      { id: 1, name: 'Ride 1', start_date: '2024-01-01T00:00:00Z' },
+      { id: 2, name: 'Ride 2', start_date: '2024-01-02T00:00:00Z' },
+      { id: 3, name: 'Ride 3', start_date: '2024-01-03T00:00:00Z' },
+    ]);
+    client.activitiesByPage.set(2, []);
+    client.activityDetail.set(1, { id: 1, name: 'Ride 1', start_date: '2024-01-01T00:00:00Z', segment_efforts: [] });
+    // No fixture for activities 2 or 3 — getActivity throws for them below.
+    const originalGetActivity = client.getActivity.bind(client);
+    client.getActivity = async (id: number) => {
+      if (id === 1) return originalGetActivity(id);
+      throw new DailyQuotaExhaustedError();
+    };
+
+    await listActivities(client, repo, state);
+    await expect(processUnprocessedActivities(client, repo)).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
+
+    expect((await repo.activityCount()).processed).toBe(1); // only activity 1 got marked processed
   });
 
   it('flags a starred segment with no effort as having no baseline', async () => {

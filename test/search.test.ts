@@ -153,6 +153,57 @@ describe('SearchService', () => {
     expect(result.items[0]?.gapToKomS).toBeDefined();
   });
 
+  it('includes a not-yet-enriched segment stub in results without attempting a projection', async () => {
+    // Simulates search running mid-backfill: segment 1 has only ever been
+    // upserted as a stub (phase 1), segment 2 has gone through full enrichment
+    // (phase 2). Both are in the corpus at once — see design.md's two-phase sync.
+    await repo.upsertSegmentStub({
+      id: 1,
+      name: 'Stub only',
+      distanceM: null,
+      averageGrade: null,
+      startLat: 51.501,
+      startLng: -0.101,
+      endLat: null,
+      endLng: null,
+    });
+    await seedSegment(repo, {
+      id: 2,
+      name: 'Fully enriched',
+      startLat: 51.502,
+      startLng: -0.102,
+      distanceM: 3538,
+      averageGrade: 0.9,
+      bearingDeg: 319.3,
+      directionality: 0.97,
+      windNeutral: false,
+      komSeconds: 306,
+      prSeconds: 320,
+      prStartDate: '2024-06-01T08:00:00Z',
+      bestKomRank: 5,
+      hasBaseline: true,
+    });
+
+    const weather = new OpenMeteoClient(backend, 60, windFetchMock(3, 139.3) as unknown as typeof fetch);
+    const service = new SearchService(repo, weather, testConfig());
+
+    const result = await service.search({ radiusM: 2000, targetDate: '2026-01-05' });
+
+    expect(result.items).toHaveLength(2);
+    const stub = result.items.find((i) => i.segmentId === 1);
+    const enriched = result.items.find((i) => i.segmentId === 2);
+
+    expect(stub).toBeDefined();
+    expect(stub?.lengthM).toBeNull();
+    expect(stub?.bearingDeg).toBeNull();
+    expect(stub?.wind).toBeUndefined();
+    expect(stub?.gapToKomS).toBeUndefined();
+    expect(stub?.komStatus).toBe('absent');
+
+    expect(enriched?.wind).toBeDefined();
+    expect(enriched?.gapToKomS).toBeDefined();
+  });
+
   it('combines filters for length, gradient and kom rank', async () => {
     await seedSegment(repo, {
       id: 1,

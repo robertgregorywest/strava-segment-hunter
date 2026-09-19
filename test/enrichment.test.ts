@@ -6,6 +6,7 @@ import { openLocalBackend, type DB } from '../src/db/index.js';
 import { Repository } from '../src/db/repository.js';
 import { enrichSegments } from '../src/sync/enrichment.js';
 import { komStatus, parseKomDuration } from '../src/segment/komStatus.js';
+import { DailyQuotaExhaustedError } from '../src/strava/rateLimiter.js';
 import type { StravaReadClient } from '../src/strava/client.js';
 import type { StravaDetailedSegment } from '../src/strava/types.js';
 
@@ -115,5 +116,28 @@ describe('enrichSegments', () => {
 
     expect(count).toBe(1);
     expect((await repo.getSegment(1))?.kom_seconds).toBe(300);
+  });
+
+  it('stops immediately on daily quota exhaustion instead of looping through the rest of the queue', async () => {
+    await repo.upsertSegmentStub({ id: 1, name: 'A', distanceM: null, averageGrade: null, startLat: 51.5, startLng: -0.1, endLat: null, endLng: null });
+    await repo.upsertSegmentStub({ id: 2, name: 'B', distanceM: null, averageGrade: null, startLat: 51.5, startLng: -0.1, endLat: null, endLng: null });
+    await repo.upsertSegmentStub({ id: 3, name: 'C', distanceM: null, averageGrade: null, startLat: 51.5, startLng: -0.1, endLat: null, endLng: null });
+
+    const client: Partial<StravaReadClient> = {
+      async getSegment(id: number) {
+        if (id === 1) return detailFixture({ id: 1 });
+        throw new DailyQuotaExhaustedError();
+      },
+    };
+
+    await expect(
+      enrichSegments(client as StravaReadClient, repo, { lat: 51.5, lng: -0.1 }, 14, 0.5),
+    ).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
+
+    // Segment 1 (already fetched before the quota threw) is persisted; 2 and 3
+    // were never attempted, so they stay queued for the next run.
+    expect((await repo.getSegment(1))?.detail_fetched_at).not.toBeNull();
+    expect((await repo.getSegment(2))?.detail_fetched_at).toBeNull();
+    expect((await repo.getSegment(3))?.detail_fetched_at).toBeNull();
   });
 });

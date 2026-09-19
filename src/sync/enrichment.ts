@@ -4,6 +4,7 @@ import { analyzeSegmentGeometry, isWindNeutral } from '../geometry/analysis.js';
 import { distanceMeters } from '../geometry/haversine.js';
 import { describeError, log, logError } from '../log.js';
 import { parseKomDuration } from '../segment/komStatus.js';
+import { DailyQuotaExhaustedError } from '../strava/rateLimiter.js';
 import type { StravaReadClient } from '../strava/client.js';
 import type { StravaDetailedSegment } from '../strava/types.js';
 
@@ -96,6 +97,11 @@ export async function enrichSegments(
 
       count += 1;
     } catch (err) {
+      // The daily quota is exhausted for every remaining segment, not just this
+      // one — stop now rather than spinning through the rest of the queue
+      // logging the same error until the job's own timeout kills it.
+      if (err instanceof DailyQuotaExhaustedError) throw err;
+
       // Left un-enriched — repo.segmentsLackingDetail()/segmentsWithStaleKom() will retry it on the next run.
       failed += 1;
       logError(`Segment ${segment.id}: failed to enrich, will retry on next run — ${describeError(err)}`);

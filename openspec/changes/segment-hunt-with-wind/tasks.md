@@ -97,10 +97,10 @@
 
 ## 12. Operational Verification
 
-- [ ] 12.1 Confirm search works against a partially complete corpus during backfill — requires running `npm run sync:backfill` against the live Strava API and querying mid-run; not executable in this environment (see final summary)
-- [ ] 12.2 Confirm an interrupted and resumed backfill neither repeats nor omits activities — requires interrupting a live `npm run sync:backfill` and resuming it; not executable in this environment (see final summary)
-- [ ] 12.3 Confirm sustained crawling never exceeds the 15-minute or daily read limits — requires observing real `X-ReadRateLimit-*` headers over a sustained live backfill; not executable in this environment (see final summary)
-- [ ] 12.4 Re-check whether `/segments/explore` remains unavailable, and record the finding — requires a live authenticated call to the Strava API; not executable in this environment (see final summary)
+- [x] 12.1 Confirm search works against a partially complete corpus during backfill — added a test (`test/search.test.ts`) covering a corpus holding both a phase-1-only stub and a fully enriched segment together; `SearchService`'s `canProject` guard already excluded stubs from projection safely, this pins that behaviour down
+- [x] 12.2 Confirm an interrupted and resumed backfill neither repeats nor omits activities — verified against production: three completed GitHub Actions `sync.yml` runs (two scheduled, one manual, all hitting the job's own 30-minute timeout) left D1 at 3,876 activities / 14,165 segments / 189,328 efforts with `COUNT(DISTINCT id)` exactly equal to `COUNT(*)` on every table, and the corpus grew monotonically run over run
+- [x] 12.3 Confirm sustained crawling never exceeds the 15-minute or daily read limits — verified against production run logs: the 15-minute budgeter paused correctly (`Short-window read budget at 181/200; pausing 5s`) and no Strava calls were made once the daily quota was exhausted. This surfaced a real bug: `enrichSegments`/`processUnprocessedActivities` caught `DailyQuotaExhaustedError` as an ordinary per-item failure and looped through the entire remaining queue logging it (10,710 times in one run) instead of stopping — fixed by re-throwing that specific error so it reaches `sync/index.ts`'s existing top-level handler; regression tests added in `test/enrichment.test.ts` and `test/sync.test.ts`
+- [ ] 12.4 Re-check whether `/segments/explore` remains unavailable, and record the finding — requires a live authenticated call to the Strava API using the production token; deferred rather than pulling that token into this environment (see design.md's passphrase-gate rationale for why credentials are handled this way)
 
 ## 13. Hosting Migration — Cloudflare D1 + GitHub Actions
 

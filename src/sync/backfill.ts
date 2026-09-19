@@ -1,6 +1,7 @@
 import type { Repository, SegmentStub } from '../db/repository.js';
 import type { SyncState } from '../db/syncState.js';
 import { describeError, log, logError } from '../log.js';
+import { DailyQuotaExhaustedError } from '../strava/rateLimiter.js';
 import type { StravaReadClient } from '../strava/client.js';
 import type { StravaSummarySegment } from '../strava/types.js';
 
@@ -104,6 +105,11 @@ export async function processUnprocessedActivities(
       await repo.markActivityProcessed(activity.id);
       processed += 1;
     } catch (err) {
+      // The daily quota is exhausted for every remaining activity, not just this
+      // one — stop now rather than spinning through the rest of the queue
+      // logging the same error until the job's own timeout kills it.
+      if (err instanceof DailyQuotaExhaustedError) throw err;
+
       // Left unprocessed — repo.unprocessedActivities() will retry it on the next run.
       failed += 1;
       logError(`Activity ${activity.id}: failed to process, will retry on next run — ${describeError(err)}`);
