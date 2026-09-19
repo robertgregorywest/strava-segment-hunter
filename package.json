@@ -10,7 +10,6 @@
     "sync:backfill": "tsx --env-file-if-exists=.env src/sync/index.ts --backfill",
     "sync:d1": "tsx --env-file-if-exists=.env --env-file-if-exists=.dev.vars src/sync/index.ts --store d1",
     "sync:backfill:d1": "tsx --env-file-if-exists=.env --env-file-if-exists=.dev.vars src/sync/index.ts --backfill --store d1",
-    "sync:backfill:bg": "./scripts/backfill.sh",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "passphrase": "tsx scripts/passphrase.ts",

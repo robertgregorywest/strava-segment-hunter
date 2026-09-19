@@ -82,32 +82,21 @@ own data.
    npm run auth
    ```
 
-4. Run the initial backfill. This pages through your full activity history and can
-   take multiple runs across separate days if it hits Strava's daily read quota —
-   it's safe to interrupt and simply re-run; progress is persisted and never repeated:
+4. Run the initial backfill against production D1. This pages through your full
+   activity history and can take several days across GitHub Actions' scheduled
+   runs if it hits Strava's daily read quota or the job's own time budget — it's
+   safe to interrupt and simply re-run; progress is persisted and never repeated:
 
    ```bash
-   npm run sync:backfill
+   npm run sync:backfill:d1
    ```
 
-   For subsequent runs, use the incremental sync instead, which only fetches
-   activities since the last known one:
+   Once running locally has confirmed everything works, `.github/workflows/sync.yml`
+   takes over automatically on its daily schedule (see "Deploying" below) — you
+   don't need to run this by hand again except to help it along.
 
-   ```bash
-   npm run sync
-   ```
-
-   To run the backfill unattended (it can take a while across thousands of
-   activities), use the backgrounded variant instead. It logs timestamped
-   progress to `logs/`, and auto-restarts on a crash (e.g. a stalled network
-   connection) since progress is committed per-activity/per-segment — a
-   restart just resumes, it never repeats work:
-
-   ```bash
-   npm run sync:backfill:bg
-   tail -f logs/backfill-*.log      # watch progress
-   kill $(cat logs/backfill.pid)    # stop it
-   ```
+   For a subsequent one-off local run, use the incremental sync instead, which
+   only fetches activities since the last known one: `npm run sync:d1`.
 
    Each Strava request is retried with backoff on transient network failures
    and bounded by a per-request timeout (`SYNC_REQUEST_TIMEOUT_MS`, default
