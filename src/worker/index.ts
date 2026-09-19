@@ -26,6 +26,11 @@ function unauthorized(): Response {
  * API or static asset alike.
  */
 async function authorized(request: Request, env: Env): Promise<boolean> {
+  // Fails closed rather than treating a missing secret as "no gate" — a
+  // misconfigured deploy should refuse every request, not silently serve
+  // this rider's data unauthenticated.
+  if (!env.PASSPHRASE_HASH) return false;
+
   const header = request.headers.get('Authorization');
   if (header === null || !header.startsWith('Basic ')) return false;
 

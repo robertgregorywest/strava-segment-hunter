@@ -115,13 +115,20 @@ touches production:
 
 ```bash
 npx wrangler d1 migrations apply strava-segment-hunter --local   # once, or after a schema change
-npm run dev                                                      # wrangler dev
+npm run passphrase                                                # once — prompts for a passphrase, prints its hash
+# add PASSPHRASE_HASH=<the printed hash> to .dev.vars
+npm run dev                                                       # wrangler dev
 ```
 
-Then open `http://localhost:8787` — Basic Auth will prompt; any username, and
-whatever passphrase you set with `npm run passphrase` (see "Deploying") for
-`.dev.vars`'s `PASSPHRASE_HASH` if you want the local server gated too, or
-leave it unset locally for convenience (production always requires it).
+Then open `http://localhost:8787` — Basic Auth will prompt for any username
+and the passphrase you just set. `PASSPHRASE_HASH` must be set even locally:
+the Worker fails closed (401) rather than granting unauthenticated access
+when it's missing, since this is the same code path that gates production.
+
+The local D1 replica starts empty (it only has the schema, not the corpus) —
+either run `npm run sync:backfill` against the local SQLite store and copy
+rows across manually, or just confirm the UI loads and `/api/search` returns
+an empty, well-formed result rather than erroring.
 
 ```bash
 npm run typecheck   # tsc --noEmit (both the Node and Worker tsconfigs)
@@ -153,6 +160,14 @@ One-time setup:
 `.github/workflows/sync.yml` runs the backfill/incremental sync daily and
 commits a heartbeat file so GitHub doesn't auto-disable the schedule after 60
 days of otherwise-quiet repository activity.
+
+To verify the deployed Worker directly: your `workers.dev` URL is
+`https://strava-segment-hunter.<your workers.dev subdomain>.workers.dev`
+(`npx wrangler subdomain` or the Cloudflare dashboard's Workers overview shows
+the subdomain). A request with no credentials, or the wrong ones, should get
+a `401` — never a `500` — confirming the passphrase gate is active; the
+correct passphrase should load the UI and `GET /api/meta`/`GET /api/search`
+should return real data once `sync.yml` has run.
 
 ## How it works
 
