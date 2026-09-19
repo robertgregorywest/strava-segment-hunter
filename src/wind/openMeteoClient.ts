@@ -52,7 +52,13 @@ export class OpenMeteoClient {
   constructor(
     private readonly db: SqlBackend,
     private readonly forecastCacheMinutes: number,
-    private readonly fetchImpl: typeof fetch = fetch,
+    // Not just `= fetch`: the Workers runtime's global fetch is a WebIDL
+    // method that requires its original `this` (globalThis) — storing the
+    // bare reference and calling it as `this.fetchImpl(...)` throws
+    // "Illegal invocation" there, even though it's silently fine under
+    // Node/vitest's fetch. Only surfaces in a real `wrangler dev`/deployed
+    // Worker, never in tests, which inject their own mock anyway.
+    private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
   ) {}
 
   /** The latest date the forecast API can project for. */
