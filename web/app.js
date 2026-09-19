@@ -3,6 +3,7 @@ const state = {
   lastSearchParams: null,
   lastItems: [],
   openSegmentId: null,
+  searchSeq: 0,
 };
 
 const map = L.map('map');
@@ -211,13 +212,19 @@ function renderResults(items) {
 async function runSearch() {
   const params = buildSearchParams();
   state.lastSearchParams = params;
+  // A search can take seconds (a forecast per nearby segment), so an earlier
+  // one may finish after a later one; only the latest may render.
+  const seq = ++state.searchSeq;
   const banner = document.getElementById('weatherBanner');
   const messageEl = document.getElementById('resultMessage');
   banner.hidden = true;
-  messageEl.hidden = true;
+  messageEl.hidden = false;
+  messageEl.textContent = 'Searching…';
 
   try {
     const result = await fetchJson(`/api/search?${params.toString()}`);
+    if (seq !== state.searchSeq) return;
+    messageEl.hidden = true;
     if (result.weatherUnavailable) banner.hidden = false;
     if (result.message) {
       messageEl.hidden = false;
@@ -225,6 +232,7 @@ async function runSearch() {
     }
     renderResults(result.items);
   } catch (err) {
+    if (seq !== state.searchSeq) return;
     messageEl.hidden = false;
     messageEl.textContent = err.message;
     renderResults([]);
