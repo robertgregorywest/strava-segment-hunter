@@ -18,28 +18,20 @@ own data.
 
 ## Architecture
 
-- **Sync** runs on a schedule in GitHub Actions (`.github/workflows/sync.yml`,
-  daily at 00:05 UTC, shortly after Strava's daily read quota rolls over) and
-  writes into [Cloudflare D1](https://developers.cloudflare.com/d1/) over its
-  HTTP API.
-- **Search/API/UI** run in a [Cloudflare Worker](https://developers.cloudflare.com/workers/)
-  (`src/worker`), reading the same D1 database and serving the static frontend
-  (`web/`) alongside it.
-- Locally, the same code runs against a local SQLite file instead — see
-  "Local development" below. Both backends implement the same `SqlBackend`
-  interface (`src/db/backend.ts`) over the same SQL, so dev/test never drifts
-  from what production runs.
-- The Worker sits at a public `workers.dev` URL with no other access control
-  in front of it, so every request (API and static assets alike) is gated by
-  a shared passphrase over HTTP Basic Auth (`src/worker/passphrase.ts`) — see
-  "Deploying" below.
+Everything runs on your own machine against one local SQLite file
+(`DB_PATH`, default `data/segment-hunter.db`):
+
+- **Sync** (`npm run sync:backfill`) pulls from Strava into the database. A
+  launchd agent (`npm run sync:schedule`) runs it once a day.
+- **Search/API/UI** (`npm run api`) is a small Node HTTP server (`src/api`)
+  that serves the static frontend (`web/`) and the search API. It listens on
+  `127.0.0.1` only, since it has no authentication.
 
 ## Requirements
 
 - Node.js 20+
 - A [Strava API application](https://www.strava.com/settings/api) (client ID and secret)
-- A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier) and the
-  [`wrangler`](https://developers.cloudflare.com/workers/wrangler/) CLI (installed via `npx`, no separate install needed)
+- macOS, for the scheduled sync (everything else runs anywhere Node does)
 
 ## Setup
 
@@ -63,7 +55,7 @@ own data.
    | `HOME_LAT` / `HOME_LNG` | Default search origin, and priority order for segment enrichment |
    | `RIDER_MASS_KG`, `RIDER_CDA`, `RIDER_CRR` | Rider + bike mass, aerodynamic drag area, rolling resistance — feed the power model |
    | `WIND_ROUGHNESS_FACTOR` | Terrain roughness exponent used to correct 10 m forecast wind to rider height |
-   | `DB_PATH` | Local SQLite database location, used for local dev/test only (default `data/segment-hunter.db`) |
+   | `DB_PATH` | SQLite database location (default `data/segment-hunter.db`) |
    | `API_PORT` | Port for the local web server (default `3000`) |
    | `KOM_FRESHNESS_DAYS` | How long a stored KOM time is trusted before being re-fetched |
    | `WIND_NEUTRAL_THRESHOLD` | Directionality below which a segment is treated as wind-neutral |
@@ -71,103 +63,51 @@ own data.
    | `SYNC_REQUEST_TIMEOUT_MS` | Per-request timeout before a Strava call is aborted and retried (default `30000`) |
    | `SYNC_MAX_NETWORK_RETRIES` | Retries for a network-level failure (not a 429) before giving up on that call (default `5`) |
 
-   Running sync against production D1 (`--store d1`, see below) additionally needs
-   `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID` and `CLOUDFLARE_API_TOKEN` — put these
-   in `.dev.vars` (gitignored, read automatically by the `*:d1` scripts) rather than
-   `.env`, matching Cloudflare's own convention.
-
 3. Authenticate with Strava (opens a browser flow, saves tokens to `STRAVA_TOKEN_PATH`):
 
    ```bash
    npm run auth
    ```
 
-4. Run the initial backfill against production D1. This pages through your full
-   activity history and can take several days across GitHub Actions' scheduled
-   runs if it hits Strava's daily read quota or the job's own time budget — it's
-   safe to interrupt and simply re-run; progress is persisted and never repeated:
+4. Run the initial backfill. It pages through your full activity history and
+   takes several days, because Strava's read quota (2,000/day) runs out well
+   before a few thousand activities and their segments are fetched. Each run
+   stops cleanly once the quota is spent, and progress is saved as it goes,
+   so it is safe to interrupt and re-run; nothing is fetched twice:
 
    ```bash
-   npm run sync:backfill:d1
+   npm run sync:backfill
    ```
 
-   Once running locally has confirmed everything works, `.github/workflows/sync.yml`
-   takes over automatically on its daily schedule (see "Deploying" below) — you
-   don't need to run this by hand again except to help it along.
+5. Schedule it, so the backfill carries on (and later stays current) by itself:
 
-   For a subsequent one-off local run, use the incremental sync instead, which
-   only fetches activities since the last known one: `npm run sync:d1`.
+   ```bash
+   npm run sync:schedule              # install the launchd agent; re-run after a Node upgrade
+   ./scripts/schedule-sync.sh uninstall
+   tail -f logs/sync.log
+   ```
+
+   The agent runs daily at 01:10 local time, just after Strava's quota resets
+   at midnight UTC. If the laptop is asleep then, launchd runs it on wake; if
+   it's shut down, that day is skipped and the next run picks up where the
+   last one stopped.
+
+   `npm run sync` is the lighter incremental variant: it only fetches
+   activities newer than the last known one.
 
    Each Strava request is retried with backoff on transient network failures
    and bounded by a per-request timeout (`SYNC_REQUEST_TIMEOUT_MS`, default
    30s) so a stalled connection fails fast instead of hanging for minutes;
    tune it and `SYNC_MAX_NETWORK_RETRIES` (default 5) via `.env` if needed.
 
-## Local development
-
-Backfill/sync locally against the local SQLite file exactly as before
-(`npm run sync:backfill`, `npm run sync`, etc. — these default to the local
-store; add `:d1` to any of them, e.g. `npm run sync:d1`, to target production
-D1 instead, using the `.dev.vars` credentials above).
-
-Run the Worker (API + UI) locally, against a local D1 replica that never
-touches production:
+## Running
 
 ```bash
-npx wrangler d1 migrations apply strava-segment-hunter --local   # once, or after a schema change
-npm run passphrase                                                # once — prompts for a passphrase, prints its hash
-# add PASSPHRASE_HASH=<the printed hash> to .dev.vars
-npm run dev                                                       # wrangler dev
-```
-
-Then open `http://localhost:8787` — Basic Auth will prompt for any username
-and the passphrase you just set. `PASSPHRASE_HASH` must be set even locally:
-the Worker fails closed (401) rather than granting unauthenticated access
-when it's missing, since this is the same code path that gates production.
-
-The local D1 replica starts empty (it only has the schema, not the corpus) —
-either run `npm run sync:backfill` against the local SQLite store and copy
-rows across manually, or just confirm the UI loads and `/api/search` returns
-an empty, well-formed result rather than erroring.
-
-```bash
-npm run typecheck   # tsc --noEmit (both the Node and Worker tsconfigs)
+npm run api         # http://localhost:3000 (or API_PORT)
+npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
 npm test            # vitest
 ```
-
-## Deploying
-
-One-time setup:
-
-1. `npx wrangler login`, then `npx wrangler d1 create strava-segment-hunter`
-   and put the resulting `database_id` in `wrangler.jsonc`.
-2. `npx wrangler d1 migrations apply strava-segment-hunter --remote`.
-3. Set a passphrase (never typed anywhere Claude or shell history can see it):
-
-   ```bash
-   npx tsx scripts/passphrase.ts | npx wrangler secret put PASSPHRASE_HASH
-   npx wrangler secret put HOME_LAT     # your home latitude — kept out of the
-   npx wrangler secret put HOME_LNG     # committed wrangler.jsonc since this repo is public
-   ```
-4. In the GitHub repo's settings, add secrets `STRAVA_CLIENT_ID`,
-   `STRAVA_CLIENT_SECRET`, `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`,
-   `CLOUDFLARE_API_TOKEN` (a token scoped to D1:Edit + Workers Scripts:Edit),
-   and variables `HOME_LAT`, `HOME_LNG`.
-5. `npx wrangler deploy`, or push to `main` — `.github/workflows/deploy.yml`
-   does this on every push after typecheck + tests pass.
-
-`.github/workflows/sync.yml` runs the backfill/incremental sync daily and
-commits a heartbeat file so GitHub doesn't auto-disable the schedule after 60
-days of otherwise-quiet repository activity.
-
-To verify the deployed Worker directly: your `workers.dev` URL is
-`https://strava-segment-hunter.<your workers.dev subdomain>.workers.dev`
-(`npx wrangler subdomain` or the Cloudflare dashboard's Workers overview shows
-the subdomain). A request with no credentials, or the wrong ones, should get
-a `401` — never a `500` — confirming the passphrase gate is active; the
-correct passphrase should load the UI and `GET /api/meta`/`GET /api/search`
-should return real data once `sync.yml` has run.
 
 ## How it works
 
@@ -186,16 +126,9 @@ should return real data once `sync.yml` has run.
   `kom_rank`, distance, gradient and directionality, annotating every result
   with the projected wind impact for a chosen target date.
 - **Web UI** (`web/`) — a dependency-light, build-step-free frontend (Leaflet +
-  vanilla JS) served as static assets alongside the Worker's API routes
-  (`src/worker`).
+  vanilla JS) served as static files alongside the API routes (`src/api`).
 
 ## Known limitations
-
-D1's free tier caps writes at 100,000 rows/day. Day-to-day incremental sync is
-nowhere near that, but the one-time migration of the full corpus (~190,000
-`segment_efforts` rows alone) blew through it in a single run — a future full
-re-backfill would need to be spread across more than one day, or run against a
-Workers Paid plan.
 
 `GET /segments/explore` returns HTTP 401 for standard Strava API applications
 even with `read_all` granted, so it can't be used for discovery. Segment

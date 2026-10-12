@@ -3,9 +3,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 
-// Shared with D1: this is the same directory `wrangler d1 migrations apply`
-// reads, at the repo root — one schema for both backends, applied here for
-// local dev/test and there for production.
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations');
 
 /**

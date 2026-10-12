@@ -28,13 +28,14 @@ describe('database', () => {
       .all()
       .map((r) => (r as { name: string }).name);
 
-    for (const expected of ['activities', 'segments', 'segment_efforts', 'sync_state', 'rate_limit_state', 'oauth_tokens']) {
+    for (const expected of ['activities', 'segments', 'segment_efforts', 'sync_state', 'rate_limit_state']) {
       expect(tables).toContain(expected);
     }
-    // No R*Tree virtual table — D1 doesn't support the rtree module, so
-    // radius search uses a plain indexed bounding-box scan instead (see
-    // repository.ts's segmentsWithinRadius).
+    // No R*Tree virtual table — radius search uses a plain indexed
+    // bounding-box scan instead (see repository.ts's segmentsWithinRadius).
     expect(tables).not.toContain('segment_rtree');
+    // Tokens live in STRAVA_TOKEN_PATH, not the database.
+    expect(tables).not.toContain('oauth_tokens');
   });
 
   it('is idempotent across repeated opens', () => {

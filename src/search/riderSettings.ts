@@ -5,9 +5,8 @@ const STATE_KEY = 'rider_settings';
 
 /**
  * Holds the rider parameters currently in effect, editable at runtime
- * without redeploying. Persisted to `sync_state` (rather than kept only in
- * memory) because a Worker isolate can be evicted at any time — an
- * in-memory-only store would silently reset a rider's tuned settings.
+ * without restarting. Persisted to `sync_state` (rather than kept only in
+ * memory) so a server restart doesn't silently reset a rider's tuned settings.
  */
 export class RiderSettingsStore {
   constructor(

@@ -2,9 +2,8 @@ import type Database from 'better-sqlite3';
 import type { SqlBackend, SqlRunResult, SqlStatement, SqlValue } from './backend.js';
 
 /**
- * Local dev/test backend: better-sqlite3, which is synchronous under the
- * hood — wrapped in `Promise.resolve()` so callers are backend-agnostic and
- * exercise the exact code path production (D1) runs.
+ * better-sqlite3, which is synchronous under the hood — wrapped in async
+ * methods to satisfy the `SqlBackend` interface.
  */
 export class SqliteBackend implements SqlBackend {
   constructor(private readonly db: Database.Database) {}

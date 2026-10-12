@@ -54,8 +54,8 @@ export interface SegmentDetail {
 
 /**
  * All corpus reads/writes go through this class — no raw SQL elsewhere.
- * Backend-agnostic (see `backend.ts`): the same queries run against a local
- * SQLite file, D1's Worker binding, or D1's HTTP API.
+ * Backend-agnostic (see `backend.ts`), so tests can run the same queries
+ * against an in-memory database.
  */
 export class Repository {
   constructor(private readonly db: SqlBackend) {}
@@ -231,10 +231,9 @@ export class Repository {
 
   /**
    * Indexed bounding-box prefilter (`idx_segments_lat_lng`), then an exact
-   * great-circle distance filter/sort in application code. Previously an
-   * R*Tree virtual table did the prefilter, but D1 doesn't support SQLite's
-   * rtree module — a plain range scan is just as fast at this corpus's size
-   * (thousands, not millions, of segments), so both backends use it.
+   * great-circle distance filter/sort in application code. A plain range
+   * scan is fast enough at this corpus's size (thousands, not millions, of
+   * segments) that an R*Tree index isn't worth having.
    */
   async segmentsWithinRadius(lat: number, lng: number, radiusM: number): Promise<NearbySegment[]> {
     const metresPerDegreeLat = 111_320;

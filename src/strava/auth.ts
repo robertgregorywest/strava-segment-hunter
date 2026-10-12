@@ -55,9 +55,8 @@ export interface StravaCredentials {
 
 /**
  * Refreshes and hands out Strava access tokens. The token store is injected
- * — a `FileTokenStore` for local dev (see `authorize.ts`), a `D1TokenStore`
- * wherever there's no local filesystem to trust across runs (GitHub Actions,
- * the Worker).
+ * so tests can substitute an in-memory one for the `FileTokenStore` that
+ * `authorize.ts` and sync use.
  */
 export class AuthManager {
   constructor(

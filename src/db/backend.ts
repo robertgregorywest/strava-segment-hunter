@@ -1,4 +1,4 @@
-/** A value bindable into a `?` placeholder — SQLite/D1's shared parameter type. */
+/** A value bindable into a `?` placeholder — SQLite's parameter type. */
 export type SqlValue = string | number | null;
 
 export interface SqlRunResult {
@@ -13,11 +13,8 @@ export interface SqlStatement {
 
 /**
  * The one seam between all corpus SQL (`src/db/repository.ts`, `syncState.ts`,
- * `openMeteoClient.ts`'s caches, `rateLimiter.ts`'s rate_limit_state) and
- * wherever the database actually lives — a local SQLite file, D1's native
- * Worker binding, or D1's HTTP API from a plain Node process. Every backend
- * implements this same shape so the SQL above it never branches on which one
- * it's talking to.
+ * `openMeteoClient.ts`'s caches, `rateLimiter.ts`'s rate_limit_state) and the
+ * SQLite database it runs against.
  */
 export interface SqlBackend {
   /** INSERT/UPDATE/DELETE. */
